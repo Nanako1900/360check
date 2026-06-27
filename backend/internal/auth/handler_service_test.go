@@ -111,12 +111,11 @@ func TestHandlerRefresh_InternalError(t *testing.T) {
 	q := &fakeQ{getByID: func(context.Context, int64) (gendb.GetUserByIDRow, error) {
 		return gendb.GetUserByIDRow{}, errBoom
 	}}
-	h, _ := newTestHandler(t, q)
 	// Seed a valid refresh token so Rotate succeeds and the user-load error fires.
 	store, _ := newTestStore(t, time.Hour)
 	enf, _ := rbac.NewInMemoryEnforcer()
 	svc := NewService(q, fakeJWT{}, store, enf)
-	h = NewHandler(svc)
+	h := NewHandler(svc)
 	tok, err := store.Create(context.Background(), 1)
 	require.NoError(t, err)
 	c, w := reqCtx(http.MethodPost, `{"refresh_token":"`+tok+`"}`, 0)

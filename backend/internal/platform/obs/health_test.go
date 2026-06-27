@@ -12,17 +12,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func doGet(t *testing.T, h http.Handler, path string) (*http.Response, map[string]any) {
+// doGet drives the handler and returns the status code plus the decoded JSON
+// body. It closes the response body itself, so callers never hold an open
+// response (keeps bodyclose happy).
+func doGet(t *testing.T, h http.Handler, path string) (int, map[string]any) {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, path, nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	res := rec.Result()
+	defer res.Body.Close()
 	var body map[string]any
 	if res.Body != nil {
 		_ = json.NewDecoder(res.Body).Decode(&body)
 	}
-	return res, body
+	return res.StatusCode, body
 }
 
 func TestHealthz_AlwaysOK(t *testing.T) {
@@ -30,8 +34,8 @@ func TestHealthz_AlwaysOK(t *testing.T) {
 	mux := NewHealthMux(nil, ReadyCheck{Name: "db", Check: func(context.Context) error {
 		return errors.New("db down")
 	}})
-	res, body := doGet(t, mux, "/healthz")
-	assert.Equal(t, http.StatusOK, res.StatusCode)
+	code, body := doGet(t, mux, "/healthz")
+	assert.Equal(t, http.StatusOK, code)
 	assert.Equal(t, "ok", body["status"])
 }
 
@@ -40,14 +44,14 @@ func TestReadyz_AllPass(t *testing.T) {
 		ReadyCheck{Name: "db", Check: func(context.Context) error { return nil }},
 		ReadyCheck{Name: "redis", Check: func(context.Context) error { return nil }},
 	)
-	res, body := doGet(t, mux, "/readyz")
-	assert.Equal(t, http.StatusOK, res.StatusCode)
+	code, body := doGet(t, mux, "/readyz")
+	assert.Equal(t, http.StatusOK, code)
 	assert.Equal(t, "ready", body["status"])
 }
 
 func TestReadyz_NoChecksIsReady(t *testing.T) {
-	res, body := doGet(t, NewHealthMux(nil), "/readyz")
-	assert.Equal(t, http.StatusOK, res.StatusCode)
+	code, body := doGet(t, NewHealthMux(nil), "/readyz")
+	assert.Equal(t, http.StatusOK, code)
 	assert.Equal(t, "ready", body["status"])
 }
 
@@ -56,8 +60,8 @@ func TestReadyz_OneFails_Returns503AndNamesIt(t *testing.T) {
 		ReadyCheck{Name: "db", Check: func(context.Context) error { return nil }},
 		ReadyCheck{Name: "redis", Check: func(context.Context) error { return errors.New("dial timeout") }},
 	)
-	res, body := doGet(t, mux, "/readyz")
-	require.Equal(t, http.StatusServiceUnavailable, res.StatusCode)
+	code, body := doGet(t, mux, "/readyz")
+	require.Equal(t, http.StatusServiceUnavailable, code)
 	assert.Equal(t, "unready", body["status"])
 	failed, ok := body["failed"].(map[string]any)
 	require.True(t, ok, "failed map present")
@@ -91,6 +95,6 @@ func TestNewHealthServer_BindsAddrAndServesMux(t *testing.T) {
 }
 
 func TestMetricsEndpoint_Served(t *testing.T) {
-	res, _ := doGet(t, NewHealthMux(nil), "/metrics")
-	assert.Equal(t, http.StatusOK, res.StatusCode)
+	code, _ := doGet(t, NewHealthMux(nil), "/metrics")
+	assert.Equal(t, http.StatusOK, code)
 }
