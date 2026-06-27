@@ -168,14 +168,14 @@ func runHealthcheck() int {
 	client := &http.Client{Timeout: 3 * time.Second}
 	resp, err := client.Get("http://127.0.0.1:" + port + "/livez")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "healthcheck: %v\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "healthcheck: %v\n", err)
 		return 1
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return 0
 	}
-	fmt.Fprintf(os.Stderr, "healthcheck: unexpected status %d\n", resp.StatusCode)
+	_, _ = fmt.Fprintf(os.Stderr, "healthcheck: unexpected status %d\n", resp.StatusCode)
 	return 1
 }
 
