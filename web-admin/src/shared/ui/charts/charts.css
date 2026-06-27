@@ -1,0 +1,23 @@
+/* 图表样式（§P7 / §10.4：图表纳入设计系统）：固定高度容器（防 CLS）、加载/错误浮层、弱层级阴影。 */
+
+.echart-shell {
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  overflow: hidden;
+}
+
+.echart-canvas {
+  display: block;
+}
+
+/* 加载/错误浮层：覆盖在画布上，半透明衬底突出层级。 */
+.echart-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  gap: var(--space-3);
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--color-ink-muted);
+  font-size: 13px;
+}

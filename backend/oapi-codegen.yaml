@@ -1,0 +1,15 @@
+# oapi-codegen v2 configuration — single source of truth for Go server stubs.
+# Generates: models (types) + Gin server interface + embedded spec, into one file.
+# The same api/openapi.yaml also drives the TS (web) and Kotlin/Retrofit (app) clients.
+package: oapi
+output: internal/gen/oapi/oapi.gen.go
+generate:
+  models: true
+  gin-server: true
+  embedded-spec: true
+  strict-server: false
+output-options:
+  # Keep generated output stable and lint-clean for the CI gen-drift check
+  # (make gen && git diff --exit-code).
+  skip-fmt: false
+  skip-prune: false

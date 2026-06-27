@@ -1,0 +1,50 @@
+/* 统计页样式（§P7 / §10.4 反模板）：bento 指标网格、图表网格、层级阴影、等宽数字。 */
+
+.stats-filter-card {
+  margin-block-start: var(--space-5);
+}
+
+/* 指标卡 bento 网格：自适应列，关键指标突出（§10.4：bento/网格突出关键指标卡）。 */
+.stats-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-4);
+  margin-block-start: var(--space-5);
+}
+
+.stats-metric {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-6);
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+  border: 1px solid var(--color-hairline-soft);
+}
+
+.stats-metric-label {
+  font-size: 13px;
+  color: var(--color-ink-muted);
+}
+
+.stats-metric-value {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  color: var(--color-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 图表网格：两列（大屏），窄屏单列。 */
+.stats-chart-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: var(--space-5);
+  margin-block-start: var(--space-5);
+}
+
+.stats-chart-card {
+  box-shadow: var(--shadow-1);
+}

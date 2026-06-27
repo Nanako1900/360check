@@ -1,0 +1,83 @@
+@import './tokens.css';
+@import '../shared/map/map.css';
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-family:
+    'Inter', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', 'Segoe UI',
+    system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* 文本选区：品牌靛蓝浅染（Stripe 细节）。 */
+::selection {
+  background: var(--color-brand-tint);
+  color: var(--color-ink);
+}
+
+/* 数字类（里程/时长/计数）等宽对齐。 */
+.num,
+.tabular {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum';
+}
+
+/* 细腻滚动条（Stripe 风：纤细、低对比、悬停加深）。 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #cdd5df transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #cdd5df;
+  border-radius: var(--radius-pill);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #aab3c0;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 尊重 prefers-reduced-motion（§10.2）。 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* 可见焦点环（Stripe blurple glow，§10.2 键盘可达）。 */
+:focus-visible {
+  outline: 2px solid var(--color-brand, #635bff);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+.app-page {
+  padding: var(--space-6);
+}

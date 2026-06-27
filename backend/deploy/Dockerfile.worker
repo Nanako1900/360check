@@ -1,0 +1,20 @@
+# syntax=docker/dockerfile:1
+# Multi-stage build for c5-worker (asynq processor). Unlike c5-api, the runtime
+# image is NOT distroless: excelize renders CJK text in exported .xlsx cells, so
+# it needs Noto Sans CJK fonts + fontconfig, and tzdata for Asia/Shanghai rendering.
+FROM golang:1.24-alpine AS builder
+WORKDIR /src
+RUN apk add --no-cache git ca-certificates
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/c5-worker ./cmd/worker
+
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates tzdata font-noto-cjk fontconfig \
+    && fc-cache -f \
+    && adduser -D -u 65532 nonroot
+ENV TZ=Asia/Shanghai
+COPY --from=builder /out/c5-worker /usr/local/bin/c5-worker
+USER nonroot
+ENTRYPOINT ["/usr/local/bin/c5-worker"]

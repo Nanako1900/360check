@@ -1,0 +1,31 @@
+# Local development dependencies for c5-api: PostGIS 16-3.4 + Redis 7.
+# Mirrors the integration-test container versions.
+services:
+  postgis:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_USER: c5
+      POSTGRES_PASSWORD: c5
+      POSTGRES_DB: c5
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U c5 -d c5"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+volumes:
+  pgdata:

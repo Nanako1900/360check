@@ -1,0 +1,82 @@
+{
+  "name": "c5-web-admin",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "C5 360相机巡查标注系统 — 网页管理后台（后端 OpenAPI 的纯消费者）",
+  "engines": {
+    "node": ">=22.12 <23"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "npm run typecheck && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write \"src/**/*.{ts,tsx,css}\" \"tests/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\" \"tests/**/*.ts\"",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:cov": "vitest run --coverage",
+    "e2e": "playwright test",
+    "gen:api": "openapi-typescript ../backend/api/openapi.yaml -o src/shared/api/generated/openapi-types.ts",
+    "msw:init": "msw init public --save"
+  },
+  "dependencies": {
+    "@ant-design/icons": "^5.6.1",
+    "@ant-design/pro-components": "^2.8.10",
+    "@ant-design/v5-patch-for-react-19": "^1.0.3",
+    "@fontsource/inter": "^5.2.8",
+    "@photo-sphere-viewer/core": "^5.14.3",
+    "@photo-sphere-viewer/markers-plugin": "^5.14.3",
+    "@tanstack/react-query": "^5.101.1",
+    "antd": "^5.29.3",
+    "axios": "^1.18.1",
+    "dayjs": "^1.11.21",
+    "echarts": "^6.1.0",
+    "echarts-for-react": "^3.0.6",
+    "i18next": "^26.3.2",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "react-i18next": "^17.0.8",
+    "react-router-dom": "^7.18.0",
+    "zod": "^4.4.3",
+    "zustand": "^5.0.14"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.4",
+    "@playwright/test": "^1.61.1",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/node": "^22.18.0",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.2.0",
+    "@vitest/coverage-v8": "^3.2.6",
+    "eslint": "^9.39.4",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.3",
+    "globals": "^17.7.0",
+    "jsdom": "^29.1.1",
+    "msw": "^2.14.6",
+    "openapi-typescript": "^7.13.0",
+    "prettier": "^3.8.4",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.62.0",
+    "vite": "^7.3.6",
+    "vitest": "^3.2.6"
+  },
+  "msw": {
+    "workerDirectory": [
+      "public"
+    ]
+  },
+  "overrides": {
+    "@ant-design/pro-components": {
+      "path-to-regexp": "^8.4.0"
+    }
+  }
+}

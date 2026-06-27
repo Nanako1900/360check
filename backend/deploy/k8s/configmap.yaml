@@ -1,0 +1,44 @@
+# Non-secret runtime configuration for c5-api and c5-worker.
+# Secrets (DB DSN, Redis password, JWT secret, COS credentials) live in the
+# Secret (see secret.example.yaml) — never put them here.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: c5-config
+  namespace: c5
+  labels:
+    app.kubernetes.io/name: c5
+    app.kubernetes.io/part-of: c5-backend
+data:
+  C5_ENV: "prod"
+  # --- HTTP server (api) ---
+  C5_SERVER_PORT: "8080"
+  C5_SERVER_MODE: "release"
+  C5_SERVER_SHUTDOWN_TIMEOUT: "20s"
+  # Ingress/CLB egress CIDR(s) trusted for X-Forwarded-For (per-IP rate-limit
+  # correctness). Empty => trust none (ClientIP = direct peer). REPLACE with your
+  # real ingress subnet; an over-broad value re-enables XFF spoofing.
+  C5_SERVER_TRUSTED_PROXIES: "10.0.0.0/8"
+  # --- DB pool (DSN itself is a Secret) ---
+  C5_DB_MAX_CONNS: "20"
+  C5_DB_MIN_CONNS: "4"
+  C5_DB_HEALTH_CHECK: "30s"
+  # --- Redis (addr non-secret; password is a Secret) ---
+  C5_REDIS_ADDR: "c5-redis.c5.svc.cluster.local:6379"
+  C5_REDIS_DB: "0"
+  # --- JWT (secret value is a Secret; lifetimes/issuer are not) ---
+  C5_JWT_ISSUER: "c5-api"
+  C5_JWT_ACCESS_TTL: "15m"
+  C5_JWT_REFRESH_TTL: "720h"
+  # --- COS / CAM (SecretId/SecretKey are Secrets) ---
+  C5_COS_REGION: "ap-guangzhou"
+  C5_COS_BUCKET_ORIGINAL: "c5-original-1300000000"
+  C5_COS_BUCKET_WEB: "c5-web-1300000000"
+  C5_COS_BUCKET_THUMB: "c5-thumb-1300000000"
+  C5_COS_CDN_DOMAIN: "https://media.example.com"
+  C5_COS_STS_ROLE_ARN: "qcs::cam::uin/100000000000:roleName/c5-upload"
+  # --- Worker health/metrics sidecar port (served by cmd/worker) ---
+  C5_WORKER_METRICS_PORT: "9091"
+  # --- Observability (P7) ---
+  C5_OBSERV_SERVICE_NAME: "c5-api"
+  C5_OBSERV_OTLP_ENDPOINT: "otel-collector.observability.svc.cluster.local:4317"

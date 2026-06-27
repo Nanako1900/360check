@@ -1,0 +1,3339 @@
+openapi: 3.0.3
+info:
+  title: C5 360相机巡查标注系统 API
+  version: 1.0.0
+  license:
+    name: Proprietary
+  description: >
+    Spec-first OpenAPI 3 contract for project C5 (360-camera inspection &
+    annotation system). This single document is the authoritative source for
+    oapi-codegen v2 → Go server stubs + TypeScript + Kotlin/Retrofit clients.
+
+
+    Conventions:
+
+    - Every response uses the shared envelope `{success, data, error, meta?}`.
+      List endpoints populate `meta` with `{total, page, page_size}`.
+
+    - All IDs are int64 (BIGSERIAL in the DB). `client_uuid` / `job_uuid` are
+      UUID strings (offline idempotency / public job handles).
+
+    - All geometry on the wire is WGS84 / SRID 4326 GeoJSON. GCJ-02 is NEVER
+      persisted or transmitted; it is a client-only render-boundary concern.
+
+    - All timestamps are RFC3339 / ISO-8601 UTC (`format: date-time`).
+
+    - Error codes are a frozen, canonical enum (see ErrorObject.code).
+
+
+    Out-of-band (NOT expressible in OpenAPI):
+
+    - `GET /exports/{job_uuid}/events` is a Server-Sent Events (`text/event-stream`)
+      endpoint emitting `event: progress` and a terminal `event: done`. It is
+      hand-written with `GET /exports/{job_uuid}` as the polling fallback
+      (Tencent CLB/CDN may buffer SSE). It is intentionally absent from `paths`.
+
+    - Dictionary / config pull uses ETag (`If-None-Match: "<content_hash>"` →
+      304 Not Modified when unchanged). 304 responses carry no body.
+
+    - Large media binaries never traverse this JSON API: clients obtain STS
+      credentials via `/media/upload-credentials`, multipart-upload directly to
+      COS, then call `/media/confirm` (backend HeadObject-verifies the key).
+
+servers:
+  - url: /api/v1
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: auth
+    description: Authentication & current-user session
+  - name: users
+    description: User administration (RBAC)
+  - name: roles
+    description: Role administration (casbin g/p mirror)
+  - name: permissions
+    description: Permission catalog (UI tree)
+  - name: dict
+    description: Dictionary types & items (admin-configurable, ETag pull)
+  - name: config
+    description: Versioned app config blocks
+  - name: projects
+    description: Projects CRUD
+  - name: tasks
+    description: Inspection tasks CRUD
+  - name: inspections
+    description: Inspection sessions & trajectory
+  - name: problems
+    description: Problem annotations, processing logs, map layer
+  - name: media
+    description: COS-backed media (STS upload, HeadObject confirm)
+  - name: stats
+    description: Aggregated statistics overview
+  - name: exports
+    description: Async Excel export jobs
+  - name: sync
+    description: Offline batch upsert
+  - name: system
+    description: Health & liveness
+
+paths:
+  # ===========================================================================
+  # System
+  # ===========================================================================
+  /healthz:
+    get:
+      tags: [system]
+      operationId: getHealthz
+      summary: Liveness / readiness probe (DB + Redis ping)
+      security: []
+      responses:
+        '200':
+          description: Service healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: Service unhealthy (DB or Redis ping failed)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ===========================================================================
+  # Auth
+  # ===========================================================================
+  /auth/login:
+    post:
+      tags: [auth]
+      operationId: authLogin
+      summary: Login with username + password
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /auth/refresh:
+    post:
+      tags: [auth]
+      operationId: authRefresh
+      summary: Rotate refresh token, mint a new access token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      responses:
+        '200':
+          description: New access token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /auth/logout:
+    post:
+      tags: [auth]
+      operationId: authLogout
+      summary: Revoke the current refresh token
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      responses:
+        '200':
+          description: Logged out
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /auth/me:
+    get:
+      tags: [auth]
+      operationId: authMe
+      summary: Current user + roles + effective permission codes
+      responses:
+        '200':
+          description: Current authenticated principal
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthMeResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /auth/password:
+    put:
+      tags: [auth]
+      operationId: authChangePassword
+      summary: Change own password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+      responses:
+        '200':
+          description: Password changed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ===========================================================================
+  # Users
+  # ===========================================================================
+  /users:
+    get:
+      tags: [users]
+      operationId: listUsers
+      summary: List users
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+        - name: q
+          in: query
+          description: Search by username / display_name
+          schema: { type: string }
+        - name: is_active
+          in: query
+          schema: { type: boolean }
+      responses:
+        '200':
+          description: User list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [users]
+      operationId: createUser
+      summary: Create a user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserCreate'
+      responses:
+        '201':
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /users/{id}:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      tags: [users]
+      operationId: getUser
+      summary: Get a user by id
+      responses:
+        '200':
+          description: User
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    put:
+      tags: [users]
+      operationId: updateUser
+      summary: Update a user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserUpdate'
+      responses:
+        '200':
+          description: User updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [users]
+      operationId: deleteUser
+      summary: Soft-delete a user
+      responses:
+        '200':
+          description: User deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /users/{id}/roles:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      tags: [users]
+      operationId: getUserRoles
+      summary: Get a user's roles (casbin g-rules)
+      responses:
+        '200':
+          description: User roles
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    put:
+      tags: [users]
+      operationId: setUserRoles
+      summary: Replace a user's roles (casbin g-rules)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetUserRolesRequest'
+      responses:
+        '200':
+          description: Roles updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /users/{id}/password:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    put:
+      tags: [users]
+      operationId: resetUserPassword
+      summary: Admin reset a user's password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResetPasswordRequest'
+      responses:
+        '200':
+          description: Password reset
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ===========================================================================
+  # Roles
+  # ===========================================================================
+  /roles:
+    get:
+      tags: [roles]
+      operationId: listRoles
+      summary: List roles
+      responses:
+        '200':
+          description: Role list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [roles]
+      operationId: createRole
+      summary: Create a role
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoleCreate'
+      responses:
+        '201':
+          description: Role created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /roles/{id}:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    put:
+      tags: [roles]
+      operationId: updateRole
+      summary: Update a role
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoleUpdate'
+      responses:
+        '200':
+          description: Role updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [roles]
+      operationId: deleteRole
+      summary: Delete a role (system roles protected)
+      responses:
+        '200':
+          description: Role deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /roles/{id}/permissions:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      tags: [roles]
+      operationId: getRolePermissions
+      summary: Get a role's permissions (casbin p-rules)
+      responses:
+        '200':
+          description: Role permissions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PermissionListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    put:
+      tags: [roles]
+      operationId: setRolePermissions
+      summary: Replace a role's permissions (casbin p-rules)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetRolePermissionsRequest'
+      responses:
+        '200':
+          description: Permissions updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PermissionListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ===========================================================================
+  # Permissions
+  # ===========================================================================
+  /permissions:
+    get:
+      tags: [permissions]
+      operationId: listPermissions
+      summary: Full permission catalog (UI tree)
+      responses:
+        '200':
+          description: Permission catalog
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PermissionListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ===========================================================================
+  # Dictionary
+  # ===========================================================================
+  /dict/types:
+    get:
+      tags: [dict]
+      operationId: listDictTypes
+      summary: List dictionary types
+      parameters:
+        - name: scope
+          in: query
+          schema:
+            $ref: '#/components/schemas/DictScope'
+        - name: is_active
+          in: query
+          schema: { type: boolean }
+      responses:
+        '200':
+          description: Dict type list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DictTypeListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [dict]
+      operationId: createDictType
+      summary: Create a dictionary type
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DictTypeCreate'
+      responses:
+        '201':
+          description: Dict type created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DictTypeResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /dict/types/{id}:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    put:
+      tags: [dict]
+      operationId: updateDictType
+      summary: Update a dictionary type
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DictTypeUpdate'
+      responses:
+        '200':
+          description: Dict type updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DictTypeResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [dict]
+      operationId: deleteDictType
+      summary: Soft-delete a dictionary type
+      responses:
+        '200':
+          description: Dict type deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /dict/types/{code}/items:
+    parameters:
+      - $ref: '#/components/parameters/CodePath'
+    get:
+      tags: [dict]
+      operationId: listDictItems
+      summary: List items for a dictionary type (ETag pull)
+      description: >
+        Returns items + sets `ETag: "<dict_type.content_hash>"`. Clients send
+        `If-None-Match` to receive 304 Not Modified when unchanged. The response
+        body includes `version` + `content_hash` so offline clients can pin
+        `dict_version_used`. Retired items (`is_active=false`) ARE included for
+        historical readability.
+      parameters:
+        - $ref: '#/components/parameters/IfNoneMatchHeader'
+        - name: include_inactive
+          in: query
+          description: Include retired (is_active=false) items. Default true.
+          schema: { type: boolean, default: true }
+      responses:
+        '200':
+          description: Dict items (with ETag header)
+          headers:
+            ETag:
+              description: dict_type.content_hash
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DictItemsResponse'
+        '304':
+          description: Not Modified (ETag matched If-None-Match); no body
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /dict/items:
+    post:
+      tags: [dict]
+      operationId: createDictItem
+      summary: Create a dictionary item (bumps the type's version/content_hash)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DictItemCreate'
+      responses:
+        '201':
+          description: Dict item created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DictItemResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /dict/items/{id}:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    put:
+      tags: [dict]
+      operationId: updateDictItem
+      summary: Update or retire a dictionary item (retire = is_active=false)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DictItemUpdate'
+      responses:
+        '200':
+          description: Dict item updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DictItemResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [dict]
+      operationId: deleteDictItem
+      summary: Retire a dictionary item (soft; never hard-delete referenced items)
+      responses:
+        '200':
+          description: Dict item retired
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ===========================================================================
+  # Config
+  # ===========================================================================
+  /config/{key}:
+    parameters:
+      - $ref: '#/components/parameters/KeyPath'
+    get:
+      tags: [config]
+      operationId: getConfig
+      summary: Get the current active config block for a key (ETag pull)
+      parameters:
+        - $ref: '#/components/parameters/IfNoneMatchHeader'
+      responses:
+        '200':
+          description: Active config block (with ETag header)
+          headers:
+            ETag:
+              description: app_config.content_hash
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppConfigResponse'
+        '304':
+          description: Not Modified (ETag matched If-None-Match); no body
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    put:
+      tags: [config]
+      operationId: putConfig
+      summary: Publish a new version of a config block (supersedes the active one)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AppConfigUpdate'
+      responses:
+        '200':
+          description: Config updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppConfigResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /config/{key}/history:
+    parameters:
+      - $ref: '#/components/parameters/KeyPath'
+    get:
+      tags: [config]
+      operationId: getConfigHistory
+      summary: Full version history of a config key
+      responses:
+        '200':
+          description: Config version history
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppConfigListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ===========================================================================
+  # Projects
+  # ===========================================================================
+  /projects:
+    get:
+      tags: [projects]
+      operationId: listProjects
+      summary: List projects
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/ProjectStatus'
+        - name: q
+          in: query
+          description: Search by code / name
+          schema: { type: string }
+      responses:
+        '200':
+          description: Project list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [projects]
+      operationId: createProject
+      summary: Create a project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectCreate'
+      responses:
+        '201':
+          description: Project created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /projects/{id}:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      tags: [projects]
+      operationId: getProject
+      summary: Get a project by id
+      responses:
+        '200':
+          description: Project
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    put:
+      tags: [projects]
+      operationId: updateProject
+      summary: Update a project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectUpdate'
+      responses:
+        '200':
+          description: Project updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [projects]
+      operationId: deleteProject
+      summary: Soft-delete a project (RESTRICT if it owns inspections)
+      responses:
+        '200':
+          description: Project deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ===========================================================================
+  # Tasks
+  # ===========================================================================
+  /tasks:
+    get:
+      tags: [tasks]
+      operationId: listTasks
+      summary: List inspection tasks
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+        - name: project_id
+          in: query
+          schema: { type: integer, format: int64 }
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/TaskStatus'
+        - name: assignee_id
+          in: query
+          schema: { type: integer, format: int64 }
+      responses:
+        '200':
+          description: Task list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InspectionTaskListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [tasks]
+      operationId: createTask
+      summary: Create an inspection task
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InspectionTaskCreate'
+      responses:
+        '201':
+          description: Task created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InspectionTaskResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /tasks/{id}:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      tags: [tasks]
+      operationId: getTask
+      summary: Get an inspection task by id
+      responses:
+        '200':
+          description: Task
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InspectionTaskResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    put:
+      tags: [tasks]
+      operationId: updateTask
+      summary: Update an inspection task
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InspectionTaskUpdate'
+      responses:
+        '200':
+          description: Task updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InspectionTaskResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [tasks]
+      operationId: deleteTask
+      summary: Soft-delete an inspection task
+      responses:
+        '200':
+          description: Task deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ===========================================================================
+  # Inspections
+  # ===========================================================================
+  /inspections:
+    get:
+      tags: [inspections]
+      operationId: listInspections
+      summary: List inspection sessions
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+        - name: project_id
+          in: query
+          schema: { type: integer, format: int64 }
+        - name: inspector_id
+          in: query
+          schema: { type: integer, format: int64 }
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/InspectionStatus'
+        - $ref: '#/components/parameters/FromParam'
+        - $ref: '#/components/parameters/ToParam'
+      responses:
+        '200':
+          description: Inspection list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InspectionListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /inspections/{id}:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      tags: [inspections]
+      operationId: getInspection
+      summary: Get an inspection session by id
+      responses:
+        '200':
+          description: Inspection
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InspectionResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /inspections/start:
+    post:
+      tags: [inspections]
+      operationId: startInspection
+      summary: Start an inspection session (status → IN_PROGRESS)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InspectionStartRequest'
+      responses:
+        '201':
+          description: Inspection started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InspectionResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /inspections/{id}/finish:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    post:
+      tags: [inspections]
+      operationId: finishInspection
+      summary: Finish an inspection (computes mileage_meters + duration_seconds, status → FINISHED)
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InspectionFinishRequest'
+      responses:
+        '200':
+          description: Inspection finished
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InspectionResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /inspections/{id}/trajectory:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      tags: [inspections]
+      operationId: getInspectionTrajectory
+      summary: Get an inspection's route + raw points (WGS84 GeoJSON)
+      responses:
+        '200':
+          description: Trajectory (route LineString + ordered points)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrajectoryResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ===========================================================================
+  # Problems
+  # ===========================================================================
+  /problems:
+    get:
+      tags: [problems]
+      operationId: listProblems
+      summary: List problems (D1 filters)
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+        - name: project_id
+          in: query
+          schema: { type: integer, format: int64 }
+        - name: type
+          in: query
+          description: type_item_id (dict_item id, scope problem_type)
+          schema: { type: integer, format: int64 }
+        - name: status
+          in: query
+          description: status_item_id (dict_item id, scope problem_status)
+          schema: { type: integer, format: int64 }
+        - name: category
+          in: query
+          description: category_item_id (dict_item id, scope problem_category)
+          schema: { type: integer, format: int64 }
+        - $ref: '#/components/parameters/FromParam'
+        - $ref: '#/components/parameters/ToParam'
+        - name: inspector_id
+          in: query
+          schema: { type: integer, format: int64 }
+        - name: inspection_id
+          in: query
+          description: D1 — filter problems by inspection session
+          schema: { type: integer, format: int64 }
+      responses:
+        '200':
+          description: Problem list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [problems]
+      operationId: createProblem
+      summary: Create a problem annotation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProblemCreate'
+      responses:
+        '201':
+          description: Problem created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /problems/map:
+    get:
+      tags: [problems]
+      operationId: getProblemsMap
+      summary: Problems as a GeoJSON FeatureCollection (WGS84) for the map layer
+      parameters:
+        - name: project_id
+          in: query
+          schema: { type: integer, format: int64 }
+        - name: type
+          in: query
+          schema: { type: integer, format: int64 }
+        - name: status
+          in: query
+          schema: { type: integer, format: int64 }
+        - name: category
+          in: query
+          schema: { type: integer, format: int64 }
+        - $ref: '#/components/parameters/FromParam'
+        - $ref: '#/components/parameters/ToParam'
+        - name: inspector_id
+          in: query
+          schema: { type: integer, format: int64 }
+        - name: inspection_id
+          in: query
+          schema: { type: integer, format: int64 }
+        - name: limit
+          in: query
+          description: Server-enforced cap to avoid full-table scans
+          schema: { type: integer, default: 5000, maximum: 20000 }
+      responses:
+        '200':
+          description: GeoJSON FeatureCollection of problem points
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemMapResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /problems/{id}:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      tags: [problems]
+      operationId: getProblem
+      summary: Get a problem by id
+      responses:
+        '200':
+          description: Problem
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    put:
+      tags: [problems]
+      operationId: updateProblem
+      summary: Update a problem
+      description: >
+        D3 — if `status_item_id` changes, the backend atomically appends a
+        `STATUS_CHANGE` row to `problem_processing_log` in the SAME transaction.
+        Clients never POST `STATUS_CHANGE` directly.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProblemUpdate'
+      responses:
+        '200':
+          description: Problem updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [problems]
+      operationId: deleteProblem
+      summary: Soft-delete a problem
+      responses:
+        '200':
+          description: Problem deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /problems/{id}/logs:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      tags: [problems]
+      operationId: listProblemLogs
+      summary: List a problem's processing logs (append-only audit trail)
+      responses:
+        '200':
+          description: Processing log list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemProcessingLogListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [problems]
+      operationId: createProblemLog
+      summary: Append a COMMENT or REASSIGN log (D3 — STATUS_CHANGE is backend-only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProblemLogCreate'
+      responses:
+        '201':
+          description: Log appended
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemProcessingLogResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ===========================================================================
+  # Media
+  # ===========================================================================
+  /media/upload-credentials:
+    post:
+      tags: [media]
+      operationId: createMediaUploadCredentials
+      summary: Issue STS credentials scoped to a per-upload prefix (6 multipart actions)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MediaUploadCredentialsRequest'
+      responses:
+        '200':
+          description: STS credentials + COS target
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MediaUploadCredentialsResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /media/confirm:
+    post:
+      tags: [media]
+      operationId: confirmMedia
+      summary: HeadObject-verify an uploaded object, advance to CONFIRMED + set verified_at
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MediaConfirmRequest'
+      responses:
+        '200':
+          description: Media confirmed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MediaAssetResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/MediaVerifyFailed'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /media/{id}:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      tags: [media]
+      operationId: getMedia
+      summary: Get a media asset with a signed CDN URL for its tier
+      responses:
+        '200':
+          description: Media asset (signed url)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MediaAssetResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ===========================================================================
+  # Stats
+  # ===========================================================================
+  /stats/overview:
+    get:
+      tags: [stats]
+      operationId: getStatsOverview
+      summary: Aggregated statistics overview (D2 — drives dashboard + PROJECT_STATS export)
+      parameters:
+        - name: project_id
+          in: query
+          schema: { type: integer, format: int64 }
+        - $ref: '#/components/parameters/FromParam'
+        - $ref: '#/components/parameters/ToParam'
+        - name: inspector_id
+          in: query
+          schema: { type: integer, format: int64 }
+      responses:
+        '200':
+          description: Statistics overview
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatsOverviewResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ===========================================================================
+  # Exports
+  # ===========================================================================
+  /exports:
+    post:
+      tags: [exports]
+      operationId: createExport
+      summary: Enqueue an async Excel export job
+      description: >
+        Returns `201 {job_uuid, status:"PENDING"}`. Track progress via SSE at
+        `GET /exports/{job_uuid}/events` (out-of-band, not in this spec) or poll
+        `GET /exports/{job_uuid}`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExportJobCreate'
+      responses:
+        '201':
+          description: Export job enqueued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExportJobResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /exports/{job_uuid}:
+    parameters:
+      - $ref: '#/components/parameters/JobUuidPath'
+    get:
+      tags: [exports]
+      operationId: getExport
+      summary: Poll an export job's status (SSE polling fallback)
+      description: >
+        On SUCCEEDED, `result_url` is a signed CDN URL to the produced `.xlsx`.
+        Clients poll every ~2s if the SSE stream drops.
+      responses:
+        '200':
+          description: Export job
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExportJobResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ===========================================================================
+  # Offline sync
+  # ===========================================================================
+  /sync/batch:
+    post:
+      tags: [sync]
+      operationId: syncBatch
+      summary: Idempotent offline batch upsert (per-item SAVEPOINT accept/reject/duplicate)
+      description: >
+        A single envelope carrying inspections, trajectory points, problems, and
+        media references created offline. Each item carries its client-generated
+        `client_uuid`; the server runs INSERT ... ON CONFLICT (client_uuid)
+        inside a per-item SAVEPOINT so one bad item never aborts the batch.
+        Historical-dictionary tolerance: items tagged with a since-retired
+        `type_item` + older `dict_version_used` are accepted, not rejected.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SyncBatchRequest'
+      responses:
+        '200':
+          description: Per-item results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncBatchResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Short-lived access JWT (golang-jwt/v5). Refresh is an opaque Redis token.
+
+  parameters:
+    IdPath:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, format: int64 }
+    CodePath:
+      name: code
+      in: path
+      required: true
+      description: dict_type.code (machine key)
+      schema: { type: string }
+    KeyPath:
+      name: key
+      in: path
+      required: true
+      description: app_config.config_key
+      schema: { type: string }
+    JobUuidPath:
+      name: job_uuid
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    PageParam:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 1, default: 1 }
+    PageSizeParam:
+      name: page_size
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 200, default: 20 }
+    FromParam:
+      name: from
+      in: query
+      description: Inclusive lower time bound (RFC3339 UTC)
+      schema: { type: string, format: date-time }
+    ToParam:
+      name: to
+      in: query
+      description: Exclusive upper time bound (RFC3339 UTC)
+      schema: { type: string, format: date-time }
+    IfNoneMatchHeader:
+      name: If-None-Match
+      in: header
+      description: ETag of the previously fetched payload (content_hash)
+      schema: { type: string }
+
+  responses:
+    BadRequest:
+      description: Malformed request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthenticated:
+      description: Missing/invalid/expired bearer token (UNAUTHENTICATED | TOKEN_EXPIRED)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: casbin (sub,obj,act) denied (FORBIDDEN)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Resource not found or soft-deleted (NOT_FOUND)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Conflict:
+      description: Unique conflict / RESTRICT / illegal state transition (CONFLICT)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    MediaVerifyFailed:
+      description: HeadObject mismatch (MEDIA_VERIFY_FAILED); state stays UPLOADING
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    ValidationFailed:
+      description: Boundary schema / business validation failed (VALIDATION_FAILED)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    RateLimited:
+      description: Hot-path rate limit hit (RATE_LIMITED); client must backoff
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    InternalError:
+      description: Unhandled error (INTERNAL); never leaks stack/SQL
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    # -------------------------------------------------------------------------
+    # Envelope building blocks
+    # -------------------------------------------------------------------------
+    Meta:
+      type: object
+      properties:
+        total: { type: integer, format: int64 }
+        page: { type: integer }
+        page_size: { type: integer }
+    ErrorCode:
+      type: string
+      enum:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - FORBIDDEN
+        - NOT_FOUND
+        - CONFLICT
+        - MEDIA_VERIFY_FAILED
+        - DICT_VERSION_RETIRED
+        - RATE_LIMITED
+        - INTERNAL
+    ErrorDetail:
+      type: object
+      required: [field, code, message]
+      properties:
+        field: { type: string }
+        code: { type: string }
+        message: { type: string }
+    ErrorObject:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        message: { type: string }
+        details:
+          type: array
+          items:
+            $ref: '#/components/schemas/ErrorDetail'
+    ErrorResponse:
+      type: object
+      required: [success, data, error]
+      properties:
+        success: { type: boolean, example: false }
+        data:
+          type: object
+          nullable: true
+          example: null
+        error:
+          $ref: '#/components/schemas/ErrorObject'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    EmptyResponse:
+      type: object
+      required: [success, error]
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          type: object
+          nullable: true
+          example: null
+        error:
+          $ref: '#/components/schemas/ErrorObject'
+        meta:
+          $ref: '#/components/schemas/Meta'
+
+    # -------------------------------------------------------------------------
+    # GeoJSON primitives (WGS84 / 4326)
+    # -------------------------------------------------------------------------
+    GeoJSONPoint:
+      type: object
+      required: [type, coordinates]
+      properties:
+        type:
+          type: string
+          enum: [Point]
+        coordinates:
+          type: array
+          description: '[longitude, latitude] in WGS84'
+          items: { type: number }
+          minItems: 2
+          maxItems: 2
+    GeoJSONLineString:
+      type: object
+      required: [type, coordinates]
+      properties:
+        type:
+          type: string
+          enum: [LineString]
+        coordinates:
+          type: array
+          items:
+            type: array
+            items: { type: number }
+            minItems: 2
+            maxItems: 2
+    GeoJSONMultiPolygon:
+      type: object
+      required: [type, coordinates]
+      properties:
+        type:
+          type: string
+          enum: [MultiPolygon]
+        coordinates:
+          type: array
+          items:
+            type: array
+            items:
+              type: array
+              items:
+                type: array
+                items: { type: number }
+    GeoJSONMultiLineString:
+      type: object
+      required: [type, coordinates]
+      properties:
+        type:
+          type: string
+          enum: [MultiLineString]
+        coordinates:
+          type: array
+          items:
+            type: array
+            items:
+              type: array
+              items: { type: number }
+    ProblemFeatureProperties:
+      type: object
+      required: [id]
+      properties:
+        id: { type: integer, format: int64 }
+        type_item_id: { type: integer, format: int64, nullable: true }
+        status_item_id: { type: integer, format: int64, nullable: true }
+        category_item_id: { type: integer, format: int64, nullable: true }
+        type_label: { type: string, nullable: true }
+        status_label: { type: string, nullable: true }
+        status_color: { type: string, nullable: true }
+        title: { type: string }
+        captured_at: { type: string, format: date-time }
+        cover_media_id: { type: integer, format: int64, nullable: true }
+    ProblemFeature:
+      type: object
+      required: [type, geometry, properties]
+      properties:
+        type:
+          type: string
+          enum: [Feature]
+        geometry:
+          $ref: '#/components/schemas/GeoJSONPoint'
+        properties:
+          $ref: '#/components/schemas/ProblemFeatureProperties'
+    ProblemFeatureCollection:
+      type: object
+      required: [type, features]
+      properties:
+        type:
+          type: string
+          enum: [FeatureCollection]
+        features:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProblemFeature'
+
+    # -------------------------------------------------------------------------
+    # Native enums (exact canonical literals)
+    # -------------------------------------------------------------------------
+    ProjectStatus:
+      type: string
+      enum: [ACTIVE, PAUSED, ARCHIVED]
+    TaskStatus:
+      type: string
+      enum: [PENDING, IN_PROGRESS, COMPLETED, ARCHIVED]
+    InspectionStatus:
+      type: string
+      enum: [IN_PROGRESS, FINISHED, ABANDONED]
+    CaptureState:
+      type: string
+      enum: [CAPTURED_RAW, STITCHED, QUEUED, UPLOADING, UPLOADED, CONFIRMED]
+    MediaTier:
+      type: string
+      enum: [original, web, thumb]
+    MediaOwnerType:
+      type: string
+      enum: [problem, inspection, project, user]
+    JobStatus:
+      type: string
+      description: CANCELLED is the optional 5th value (cancellation is optional to expose).
+      enum: [PENDING, RUNNING, SUCCEEDED, FAILED, CANCELLED]
+    ExportType:
+      type: string
+      enum: [INSPECTION_RECORDS, PROBLEM_LIST, PROJECT_STATS]
+    DictScope:
+      type: string
+      enum: [problem_type, problem_status, problem_category, project_field, capture_preset, misc]
+    ProcessingAction:
+      type: string
+      description: STATUS_CHANGE is backend-only (D3); clients POST only COMMENT/REASSIGN.
+      enum: [STATUS_CHANGE, COMMENT, REASSIGN]
+    ClientLogAction:
+      type: string
+      description: Client-postable subset of ProcessingAction (D3).
+      enum: [COMMENT, REASSIGN]
+    SyncItemStatus:
+      type: string
+      enum: [accepted, rejected, duplicate]
+
+    # -------------------------------------------------------------------------
+    # Entity schemas
+    # -------------------------------------------------------------------------
+    User:
+      type: object
+      required: [id, username, display_name, is_active, created_at, updated_at]
+      description: password_hash is NEVER exposed.
+      properties:
+        id: { type: integer, format: int64 }
+        username: { type: string }
+        display_name: { type: string }
+        phone: { type: string, nullable: true }
+        email: { type: string, nullable: true }
+        avatar_media_id: { type: integer, format: int64, nullable: true }
+        is_active: { type: boolean }
+        last_login_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    Role:
+      type: object
+      required: [id, code, name, is_system, sort_order]
+      properties:
+        id: { type: integer, format: int64 }
+        code: { type: string }
+        name: { type: string }
+        description: { type: string }
+        is_system: { type: boolean }
+        sort_order: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    Permission:
+      type: object
+      required: [id, code, name, object, action]
+      properties:
+        id: { type: integer, format: int64 }
+        code: { type: string }
+        name: { type: string }
+        object: { type: string }
+        action: { type: string }
+        group_name: { type: string }
+        description: { type: string }
+        sort_order: { type: integer }
+    Project:
+      type: object
+      required: [id, code, name, status, created_at, updated_at]
+      properties:
+        id: { type: integer, format: int64 }
+        code: { type: string }
+        name: { type: string }
+        description: { type: string }
+        status:
+          $ref: '#/components/schemas/ProjectStatus'
+        custom_fields:
+          type: object
+          additionalProperties: true
+        area_geom:
+          $ref: '#/components/schemas/GeoJSONMultiPolygon'
+        start_date: { type: string, format: date, nullable: true }
+        end_date: { type: string, format: date, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    InspectionTask:
+      type: object
+      required: [id, project_id, title, status, created_at, updated_at]
+      properties:
+        id: { type: integer, format: int64 }
+        project_id: { type: integer, format: int64 }
+        title: { type: string }
+        description: { type: string }
+        status:
+          $ref: '#/components/schemas/TaskStatus'
+        assignee_id: { type: integer, format: int64, nullable: true }
+        planned_start: { type: string, format: date-time, nullable: true }
+        planned_end: { type: string, format: date-time, nullable: true }
+        plan_geom:
+          $ref: '#/components/schemas/GeoJSONMultiLineString'
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    Inspection:
+      type: object
+      required:
+        - id
+        - client_uuid
+        - project_id
+        - inspector_id
+        - status
+        - started_at
+        - duration_seconds
+        - mileage_meters
+        - point_count
+        - created_at
+        - updated_at
+      properties:
+        id: { type: integer, format: int64 }
+        client_uuid: { type: string, format: uuid }
+        project_id: { type: integer, format: int64 }
+        task_id: { type: integer, format: int64, nullable: true }
+        inspector_id: { type: integer, format: int64 }
+        status:
+          $ref: '#/components/schemas/InspectionStatus'
+        started_at: { type: string, format: date-time }
+        ended_at: { type: string, format: date-time, nullable: true }
+        duration_seconds: { type: integer, format: int64 }
+        mileage_meters:
+          type: number
+          format: double
+          description: SUM via ST_Length(route_geom::geography) — meters.
+        point_count: { type: integer }
+        route_geom:
+          $ref: '#/components/schemas/GeoJSONLineString'
+        device_info:
+          type: object
+          additionalProperties: true
+        note: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    TrajectoryPoint:
+      type: object
+      required: [id, client_uuid, inspection_id, seq, geom, recorded_at]
+      properties:
+        id: { type: integer, format: int64 }
+        client_uuid: { type: string, format: uuid }
+        inspection_id: { type: integer, format: int64 }
+        seq: { type: integer }
+        geom:
+          $ref: '#/components/schemas/GeoJSONPoint'
+        recorded_at: { type: string, format: date-time }
+        speed: { type: number, format: float, nullable: true }
+        bearing: { type: number, format: float, nullable: true }
+        altitude: { type: number, format: float, nullable: true }
+        accuracy: { type: number, format: float, nullable: true }
+    Problem:
+      type: object
+      required:
+        - id
+        - client_uuid
+        - project_id
+        - inspector_id
+        - geom
+        - dict_version_used
+        - captured_at
+        - created_at
+        - updated_at
+      properties:
+        id: { type: integer, format: int64 }
+        client_uuid: { type: string, format: uuid }
+        project_id: { type: integer, format: int64 }
+        inspection_id: { type: integer, format: int64, nullable: true }
+        inspector_id: { type: integer, format: int64 }
+        geom:
+          $ref: '#/components/schemas/GeoJSONPoint'
+        type_item_id: { type: integer, format: int64, nullable: true }
+        status_item_id: { type: integer, format: int64, nullable: true }
+        category_item_id: { type: integer, format: int64, nullable: true }
+        dict_version_used: { type: integer }
+        title: { type: string }
+        description: { type: string }
+        note: { type: string }
+        captured_at: { type: string, format: date-time }
+        cover_media_id: { type: integer, format: int64, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ProblemProcessingLog:
+      type: object
+      required: [id, problem_id, action, created_at]
+      properties:
+        id: { type: integer, format: int64 }
+        problem_id: { type: integer, format: int64 }
+        action:
+          $ref: '#/components/schemas/ProcessingAction'
+        from_status_item_id: { type: integer, format: int64, nullable: true }
+        to_status_item_id: { type: integer, format: int64, nullable: true }
+        note: { type: string }
+        operator_id: { type: integer, format: int64, nullable: true }
+        created_at: { type: string, format: date-time }
+    MediaAsset:
+      type: object
+      required:
+        - id
+        - client_uuid
+        - owner_type
+        - owner_id
+        - tier
+        - cos_bucket
+        - cos_key
+        - cos_region
+        - capture_state
+        - created_at
+        - updated_at
+      properties:
+        id: { type: integer, format: int64 }
+        client_uuid: { type: string, format: uuid }
+        owner_type:
+          $ref: '#/components/schemas/MediaOwnerType'
+        owner_id: { type: integer, format: int64 }
+        tier:
+          $ref: '#/components/schemas/MediaTier'
+        cos_bucket: { type: string }
+        cos_key: { type: string }
+        cos_region: { type: string }
+        content_type: { type: string }
+        byte_size: { type: integer, format: int64, nullable: true }
+        width: { type: integer, nullable: true }
+        height: { type: integer, nullable: true }
+        etag: { type: string, nullable: true }
+        capture_state:
+          $ref: '#/components/schemas/CaptureState'
+        verified_at: { type: string, format: date-time, nullable: true }
+        media_group: { type: string, format: uuid, nullable: true }
+        meta:
+          type: object
+          additionalProperties: true
+        signed_url:
+          type: string
+          nullable: true
+          description: Signed CDN URL for this tier (populated by GET /media/{id}).
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    DictType:
+      type: object
+      required: [id, code, name, scope, version, content_hash, is_active]
+      properties:
+        id: { type: integer, format: int64 }
+        code: { type: string }
+        name: { type: string }
+        scope:
+          $ref: '#/components/schemas/DictScope'
+        description: { type: string }
+        version: { type: integer }
+        content_hash: { type: string }
+        is_active: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    DictItem:
+      type: object
+      required: [id, dict_type_id, code, label, sort_order, is_active]
+      properties:
+        id: { type: integer, format: int64 }
+        dict_type_id: { type: integer, format: int64 }
+        code: { type: string }
+        label: { type: string }
+        color: { type: string, nullable: true }
+        extra:
+          type: object
+          additionalProperties: true
+        sort_order: { type: integer }
+        is_active:
+          type: boolean
+          description: false = retired (kept for history; clients MUST still render).
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    DictItemsPayload:
+      type: object
+      required: [type, version, content_hash, items]
+      properties:
+        type:
+          $ref: '#/components/schemas/DictType'
+        version: { type: integer }
+        content_hash: { type: string }
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/DictItem'
+    AppConfig:
+      type: object
+      required: [id, config_key, value, version, content_hash, is_active]
+      properties:
+        id: { type: integer, format: int64 }
+        config_key: { type: string }
+        value:
+          type: object
+          additionalProperties: true
+        version: { type: integer }
+        content_hash: { type: string }
+        is_active: { type: boolean }
+        effective_from: { type: string, format: date-time }
+        effective_to: { type: string, format: date-time, nullable: true }
+        description: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ExportJob:
+      type: object
+      required: [id, job_uuid, type, status, progress, processed_rows, created_at]
+      properties:
+        id: { type: integer, format: int64 }
+        job_uuid: { type: string, format: uuid }
+        type:
+          $ref: '#/components/schemas/ExportType'
+        params:
+          type: object
+          additionalProperties: true
+        status:
+          $ref: '#/components/schemas/JobStatus'
+        progress: { type: integer, minimum: 0, maximum: 100 }
+        total_rows: { type: integer, nullable: true }
+        processed_rows: { type: integer }
+        result_cos_key: { type: string, nullable: true }
+        result_bucket: { type: string, nullable: true }
+        result_url:
+          type: string
+          nullable: true
+          description: Signed CDN URL to the produced .xlsx (set on SUCCEEDED).
+        error: { type: string, nullable: true }
+        requested_by: { type: integer, format: int64, nullable: true }
+        started_at: { type: string, format: date-time, nullable: true }
+        finished_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+    CountBucket:
+      type: object
+      required: [label, count]
+      properties:
+        item_id: { type: integer, format: int64, nullable: true }
+        inspector_id: { type: integer, format: int64, nullable: true }
+        project_id: { type: integer, format: int64, nullable: true }
+        label: { type: string }
+        color:
+          type: string
+          nullable: true
+          description: dict_item.color; retired items included for history.
+        count: { type: integer, format: int64 }
+    StatsOverview:
+      type: object
+      required:
+        - inspection_count
+        - problem_count
+        - total_mileage_meters
+        - total_duration_seconds
+        - avg_duration_seconds
+        - counts_by_type
+        - counts_by_status
+        - counts_by_inspector
+        - counts_by_project
+      properties:
+        inspection_count: { type: integer, format: int64 }
+        problem_count: { type: integer, format: int64 }
+        total_mileage_meters: { type: number, format: double }
+        total_duration_seconds: { type: integer, format: int64 }
+        avg_duration_seconds: { type: number, format: double }
+        counts_by_type:
+          type: array
+          items:
+            $ref: '#/components/schemas/CountBucket'
+        counts_by_status:
+          type: array
+          items:
+            $ref: '#/components/schemas/CountBucket'
+        counts_by_inspector:
+          type: array
+          items:
+            $ref: '#/components/schemas/CountBucket'
+        counts_by_project:
+          type: array
+          items:
+            $ref: '#/components/schemas/CountBucket'
+    Trajectory:
+      type: object
+      required: [inspection_id, points]
+      properties:
+        inspection_id: { type: integer, format: int64 }
+        route:
+          $ref: '#/components/schemas/GeoJSONLineString'
+        points:
+          type: array
+          items:
+            $ref: '#/components/schemas/TrajectoryPoint'
+    AuthMe:
+      type: object
+      required: [user, roles, permissions]
+      properties:
+        user:
+          $ref: '#/components/schemas/User'
+        roles:
+          type: array
+          items:
+            $ref: '#/components/schemas/Role'
+        permissions:
+          type: array
+          description: Effective casbin permission codes (drives dynamic menu/guards).
+          items: { type: string }
+    AuthTokens:
+      type: object
+      required: [access_token, refresh_token, expires_in, user]
+      properties:
+        access_token: { type: string }
+        refresh_token: { type: string }
+        expires_in:
+          type: integer
+          description: Access token lifetime in seconds.
+        user:
+          $ref: '#/components/schemas/User'
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, example: ok }
+        db: { type: boolean }
+        redis: { type: boolean }
+
+    # -------------------------------------------------------------------------
+    # Request bodies
+    # -------------------------------------------------------------------------
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username: { type: string }
+        password: { type: string, format: password }
+    RefreshRequest:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token: { type: string }
+    ChangePasswordRequest:
+      type: object
+      required: [old_password, new_password]
+      properties:
+        old_password: { type: string, format: password }
+        new_password: { type: string, format: password }
+    ResetPasswordRequest:
+      type: object
+      required: [new_password]
+      properties:
+        new_password: { type: string, format: password }
+    UserCreate:
+      type: object
+      required: [username, password]
+      properties:
+        username: { type: string }
+        password: { type: string, format: password }
+        display_name: { type: string }
+        phone: { type: string }
+        email: { type: string }
+        is_active: { type: boolean, default: true }
+        role_ids:
+          type: array
+          items: { type: integer, format: int64 }
+    UserUpdate:
+      type: object
+      properties:
+        display_name: { type: string }
+        phone: { type: string, nullable: true }
+        email: { type: string, nullable: true }
+        avatar_media_id: { type: integer, format: int64, nullable: true }
+        is_active: { type: boolean }
+    SetUserRolesRequest:
+      type: object
+      required: [role_ids]
+      properties:
+        role_ids:
+          type: array
+          items: { type: integer, format: int64 }
+    RoleCreate:
+      type: object
+      required: [code, name]
+      properties:
+        code: { type: string }
+        name: { type: string }
+        description: { type: string }
+        sort_order: { type: integer }
+    RoleUpdate:
+      type: object
+      properties:
+        name: { type: string }
+        description: { type: string }
+        sort_order: { type: integer }
+    SetRolePermissionsRequest:
+      type: object
+      required: [permission_ids]
+      properties:
+        permission_ids:
+          type: array
+          items: { type: integer, format: int64 }
+    DictTypeCreate:
+      type: object
+      required: [code, name, scope]
+      properties:
+        code: { type: string }
+        name: { type: string }
+        scope:
+          $ref: '#/components/schemas/DictScope'
+        description: { type: string }
+    DictTypeUpdate:
+      type: object
+      properties:
+        name: { type: string }
+        description: { type: string }
+        is_active: { type: boolean }
+    DictItemCreate:
+      type: object
+      required: [dict_type_id, code, label]
+      properties:
+        dict_type_id: { type: integer, format: int64 }
+        code: { type: string }
+        label: { type: string }
+        color: { type: string }
+        extra:
+          type: object
+          additionalProperties: true
+        sort_order: { type: integer }
+    DictItemUpdate:
+      type: object
+      properties:
+        label: { type: string }
+        color: { type: string, nullable: true }
+        extra:
+          type: object
+          additionalProperties: true
+        sort_order: { type: integer }
+        is_active:
+          type: boolean
+          description: Set false to retire (never hard-delete a referenced item).
+    AppConfigUpdate:
+      type: object
+      required: [value]
+      properties:
+        value:
+          type: object
+          additionalProperties: true
+        description: { type: string }
+        effective_from: { type: string, format: date-time }
+    ProjectCreate:
+      type: object
+      required: [code, name]
+      properties:
+        code: { type: string }
+        name: { type: string }
+        description: { type: string }
+        status:
+          $ref: '#/components/schemas/ProjectStatus'
+        custom_fields:
+          type: object
+          additionalProperties: true
+        area_geom:
+          $ref: '#/components/schemas/GeoJSONMultiPolygon'
+        start_date: { type: string, format: date }
+        end_date: { type: string, format: date }
+    ProjectUpdate:
+      type: object
+      properties:
+        name: { type: string }
+        description: { type: string }
+        status:
+          $ref: '#/components/schemas/ProjectStatus'
+        custom_fields:
+          type: object
+          additionalProperties: true
+        area_geom:
+          $ref: '#/components/schemas/GeoJSONMultiPolygon'
+        start_date: { type: string, format: date, nullable: true }
+        end_date: { type: string, format: date, nullable: true }
+    InspectionTaskCreate:
+      type: object
+      required: [project_id, title]
+      properties:
+        project_id: { type: integer, format: int64 }
+        title: { type: string }
+        description: { type: string }
+        status:
+          $ref: '#/components/schemas/TaskStatus'
+        assignee_id: { type: integer, format: int64, nullable: true }
+        planned_start: { type: string, format: date-time, nullable: true }
+        planned_end: { type: string, format: date-time, nullable: true }
+        plan_geom:
+          $ref: '#/components/schemas/GeoJSONMultiLineString'
+    InspectionTaskUpdate:
+      type: object
+      properties:
+        title: { type: string }
+        description: { type: string }
+        status:
+          $ref: '#/components/schemas/TaskStatus'
+        assignee_id: { type: integer, format: int64, nullable: true }
+        planned_start: { type: string, format: date-time, nullable: true }
+        planned_end: { type: string, format: date-time, nullable: true }
+        plan_geom:
+          $ref: '#/components/schemas/GeoJSONMultiLineString'
+    InspectionStartRequest:
+      type: object
+      required: [project_id, started_at]
+      properties:
+        client_uuid:
+          type: string
+          format: uuid
+          description: Offline idempotency key (server generates if omitted).
+        project_id: { type: integer, format: int64 }
+        task_id: { type: integer, format: int64, nullable: true }
+        inspector_id:
+          type: integer
+          format: int64
+          nullable: true
+          description: Defaults to the authenticated user if omitted.
+        started_at: { type: string, format: date-time }
+        device_info:
+          type: object
+          additionalProperties: true
+        note: { type: string }
+    InspectionFinishRequest:
+      type: object
+      properties:
+        ended_at:
+          type: string
+          format: date-time
+          description: Defaults to server time if omitted. Must be >= started_at.
+        status:
+          $ref: '#/components/schemas/InspectionStatus'
+        note: { type: string }
+    ProblemCreate:
+      type: object
+      required: [project_id, geom, captured_at]
+      properties:
+        client_uuid:
+          type: string
+          format: uuid
+          description: Offline idempotency key (server generates if omitted).
+        project_id: { type: integer, format: int64 }
+        inspection_id: { type: integer, format: int64, nullable: true }
+        inspector_id:
+          type: integer
+          format: int64
+          nullable: true
+          description: Defaults to the authenticated user if omitted.
+        geom:
+          $ref: '#/components/schemas/GeoJSONPoint'
+        type_item_id: { type: integer, format: int64, nullable: true }
+        status_item_id: { type: integer, format: int64, nullable: true }
+        category_item_id: { type: integer, format: int64, nullable: true }
+        dict_version_used: { type: integer }
+        title: { type: string }
+        description: { type: string }
+        note: { type: string }
+        captured_at: { type: string, format: date-time }
+        cover_media_id: { type: integer, format: int64, nullable: true }
+    ProblemUpdate:
+      type: object
+      description: >
+        D3 — changing status_item_id makes the backend append a STATUS_CHANGE
+        log row in the same transaction.
+      properties:
+        inspection_id: { type: integer, format: int64, nullable: true }
+        type_item_id: { type: integer, format: int64, nullable: true }
+        status_item_id: { type: integer, format: int64, nullable: true }
+        category_item_id: { type: integer, format: int64, nullable: true }
+        title: { type: string }
+        description: { type: string }
+        note: { type: string }
+        cover_media_id: { type: integer, format: int64, nullable: true }
+    ProblemLogCreate:
+      type: object
+      required: [action]
+      description: D3 — only COMMENT or REASSIGN; STATUS_CHANGE is backend-only.
+      properties:
+        action:
+          $ref: '#/components/schemas/ClientLogAction'
+        note: { type: string }
+        operator_id:
+          type: integer
+          format: int64
+          nullable: true
+          description: For REASSIGN, the new operator/assignee user id.
+    MediaUploadCredentialsRequest:
+      type: object
+      required: [owner_type, owner_id, tier, content_type, byte_size, client_uuid]
+      properties:
+        owner_type:
+          $ref: '#/components/schemas/MediaOwnerType'
+        owner_id: { type: integer, format: int64 }
+        tier:
+          $ref: '#/components/schemas/MediaTier'
+        content_type: { type: string }
+        byte_size: { type: integer, format: int64 }
+        client_uuid: { type: string, format: uuid }
+    MediaConfirmRequest:
+      type: object
+      required: [client_uuid, key, etag, byte_size]
+      properties:
+        client_uuid: { type: string, format: uuid }
+        key:
+          type: string
+          description: COS object key under the per-upload prefix.
+        etag: { type: string }
+        byte_size: { type: integer, format: int64 }
+        width: { type: integer }
+        height: { type: integer }
+    ExportJobCreate:
+      type: object
+      required: [type]
+      properties:
+        type:
+          $ref: '#/components/schemas/ExportType'
+        params:
+          type: object
+          additionalProperties: true
+          description: >
+            Filters by export type — INSPECTION_RECORDS:
+            {project_id, inspector_id, from, to, status};
+            PROBLEM_LIST:
+            {project_id, type, status, category, from, to, inspector_id, inspection_id};
+            PROJECT_STATS: {project_id?, from, to, inspector_id?}.
+    SyncInspectionItem:
+      type: object
+      required: [client_uuid, project_id, started_at]
+      properties:
+        client_uuid: { type: string, format: uuid }
+        project_id: { type: integer, format: int64 }
+        task_id: { type: integer, format: int64, nullable: true }
+        inspector_id: { type: integer, format: int64, nullable: true }
+        status:
+          $ref: '#/components/schemas/InspectionStatus'
+        started_at: { type: string, format: date-time }
+        ended_at: { type: string, format: date-time, nullable: true }
+        device_info:
+          type: object
+          additionalProperties: true
+        note: { type: string }
+    SyncTrajectoryPointItem:
+      type: object
+      required: [client_uuid, inspection_client_uuid, seq, geom, recorded_at]
+      properties:
+        client_uuid: { type: string, format: uuid }
+        inspection_client_uuid:
+          type: string
+          format: uuid
+          description: Parent inspection's client_uuid (resolved server-side to inspection_id).
+        seq: { type: integer }
+        geom:
+          $ref: '#/components/schemas/GeoJSONPoint'
+        recorded_at: { type: string, format: date-time }
+        speed: { type: number, format: float, nullable: true }
+        bearing: { type: number, format: float, nullable: true }
+        altitude: { type: number, format: float, nullable: true }
+        accuracy: { type: number, format: float, nullable: true }
+    SyncProblemItem:
+      type: object
+      required: [client_uuid, project_id, geom, captured_at]
+      properties:
+        client_uuid: { type: string, format: uuid }
+        inspection_client_uuid: { type: string, format: uuid, nullable: true }
+        project_id: { type: integer, format: int64 }
+        inspector_id: { type: integer, format: int64, nullable: true }
+        geom:
+          $ref: '#/components/schemas/GeoJSONPoint'
+        type_item_id: { type: integer, format: int64, nullable: true }
+        status_item_id: { type: integer, format: int64, nullable: true }
+        category_item_id: { type: integer, format: int64, nullable: true }
+        dict_version_used:
+          type: integer
+          description: Historical tolerance — retired type_item + older version is accepted.
+        title: { type: string }
+        description: { type: string }
+        note: { type: string }
+        captured_at: { type: string, format: date-time }
+    SyncMediaItem:
+      type: object
+      required: [client_uuid, owner_type, tier, cos_bucket, cos_key, capture_state]
+      properties:
+        client_uuid: { type: string, format: uuid }
+        owner_type:
+          $ref: '#/components/schemas/MediaOwnerType'
+        owner_client_uuid:
+          type: string
+          format: uuid
+          nullable: true
+          description: Owner's client_uuid (problem/inspection) resolved server-side.
+        tier:
+          $ref: '#/components/schemas/MediaTier'
+        cos_bucket: { type: string }
+        cos_key: { type: string }
+        cos_region: { type: string }
+        content_type: { type: string }
+        byte_size: { type: integer, format: int64, nullable: true }
+        width: { type: integer, nullable: true }
+        height: { type: integer, nullable: true }
+        etag: { type: string, nullable: true }
+        capture_state:
+          $ref: '#/components/schemas/CaptureState'
+        media_group: { type: string, format: uuid, nullable: true }
+    SyncBatchRequest:
+      type: object
+      properties:
+        inspections:
+          type: array
+          items:
+            $ref: '#/components/schemas/SyncInspectionItem'
+        trajectory_points:
+          type: array
+          items:
+            $ref: '#/components/schemas/SyncTrajectoryPointItem'
+        problems:
+          type: array
+          items:
+            $ref: '#/components/schemas/SyncProblemItem'
+        media:
+          type: array
+          items:
+            $ref: '#/components/schemas/SyncMediaItem'
+    SyncItemResult:
+      type: object
+      required: [client_uuid, status]
+      properties:
+        client_uuid: { type: string, format: uuid }
+        status:
+          $ref: '#/components/schemas/SyncItemStatus'
+        server_id: { type: integer, format: int64, nullable: true }
+        error: { type: string, nullable: true }
+    SyncBatchResult:
+      type: object
+      required: [results]
+      properties:
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SyncItemResult'
+        accepted:
+          type: array
+          items:
+            $ref: '#/components/schemas/SyncItemResult'
+        rejected:
+          type: array
+          items:
+            $ref: '#/components/schemas/SyncItemResult'
+        duplicate:
+          type: array
+          items:
+            $ref: '#/components/schemas/SyncItemResult'
+    MediaUploadCredentials:
+      type: object
+      required: [bucket, region, key, prefix, credentials]
+      properties:
+        bucket: { type: string }
+        region: { type: string }
+        key: { type: string }
+        prefix:
+          type: string
+          description: STS policy is scoped to this per-upload prefix.
+        credentials:
+          $ref: '#/components/schemas/StsCredentials'
+    StsCredentials:
+      type: object
+      required: [tmpSecretId, tmpSecretKey, sessionToken, expiredTime]
+      properties:
+        tmpSecretId: { type: string }
+        tmpSecretKey: { type: string }
+        sessionToken: { type: string }
+        expiredTime: { type: integer, format: int64 }
+
+    # -------------------------------------------------------------------------
+    # Per-endpoint typed response wrappers
+    # -------------------------------------------------------------------------
+    HealthResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          $ref: '#/components/schemas/Health'
+        error:
+          $ref: '#/components/schemas/ErrorObject'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    LoginResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          $ref: '#/components/schemas/AuthTokens'
+        error:
+          $ref: '#/components/schemas/ErrorObject'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    AuthMeResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          $ref: '#/components/schemas/AuthMe'
+        error:
+          $ref: '#/components/schemas/ErrorObject'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    UserResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          $ref: '#/components/schemas/User'
+        error:
+          $ref: '#/components/schemas/ErrorObject'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    UserListResponse:
+      type: object
+      required: [success, data, meta]
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/User'
+        error:
+          $ref: '#/components/schemas/ErrorObject'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    RoleResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          $ref: '#/components/schemas/Role'
+        error:
+          $ref: '#/components/schemas/ErrorObject'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    RoleListResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Role'
+        error:
+          $ref: '#/components/schemas/ErrorObject'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    PermissionListResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Permission'
+        error:
+          $ref: '#/components/schemas/ErrorObject'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    DictTypeResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          $ref: '#/components/schemas/DictType'
+        error:
+          $ref: '#/components/schemas/ErrorObject'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    DictTypeListResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/DictType'
+        error:
+          $ref: '#/components/schemas/ErrorObject'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    DictItemResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          $ref: '#/components/schemas/DictItem'
+        error:
+          $ref: '#/components/schemas/ErrorObject'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    DictItemsResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          $ref: '#/components/schemas/DictItemsPayload'
+        error:
+          $ref: '#/components/schemas/ErrorObject'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    AppConfigResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          $ref: '#/components/schemas/AppConfig'
+        error:
+          $ref: '#/components/schemas/ErrorObject'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    AppConfigListResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/AppConfig'
+        error:
+          $ref: '#/components/schemas/ErrorObject'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    ProjectResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          $ref: '#/components/schemas/Project'
+        error:
+          $ref: '#/components/schemas/ErrorObject'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    ProjectListResponse:
+      type: object
+      required: [success, data, meta]
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Project'
+        error:
+          $ref: '#/components/schemas/ErrorObject'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    InspectionTaskResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          $ref: '#/components/schemas/InspectionTask'
+        error:
+          $ref: '#/components/schemas/ErrorObject'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    InspectionTaskListResponse:
+      type: object
+      required: [success, data, meta]
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/InspectionTask'
+        error:
+          $ref: '#/components/schemas/ErrorObject'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    InspectionResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          $ref: '#/components/schemas/Inspection'
+        error:
+          $ref: '#/components/schemas/ErrorObject'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    InspectionListResponse:
+      type: object
+      required: [success, data, meta]
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Inspection'
+        error:
+          $ref: '#/components/schemas/ErrorObject'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    TrajectoryResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          $ref: '#/components/schemas/Trajectory'
+        error:
+          $ref: '#/components/schemas/ErrorObject'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    ProblemResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          $ref: '#/components/schemas/Problem'
+        error:
+          $ref: '#/components/schemas/ErrorObject'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    ProblemListResponse:
+      type: object
+      required: [success, data, meta]
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Problem'
+        error:
+          $ref: '#/components/schemas/ErrorObject'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    ProblemMapResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          $ref: '#/components/schemas/ProblemFeatureCollection'
+        error:
+          $ref: '#/components/schemas/ErrorObject'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    ProblemProcessingLogResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          $ref: '#/components/schemas/ProblemProcessingLog'
+        error:
+          $ref: '#/components/schemas/ErrorObject'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    ProblemProcessingLogListResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProblemProcessingLog'
+        error:
+          $ref: '#/components/schemas/ErrorObject'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    MediaAssetResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          $ref: '#/components/schemas/MediaAsset'
+        error:
+          $ref: '#/components/schemas/ErrorObject'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    MediaUploadCredentialsResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          $ref: '#/components/schemas/MediaUploadCredentials'
+        error:
+          $ref: '#/components/schemas/ErrorObject'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    StatsOverviewResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          $ref: '#/components/schemas/StatsOverview'
+        error:
+          $ref: '#/components/schemas/ErrorObject'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    ExportJobResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          $ref: '#/components/schemas/ExportJob'
+        error:
+          $ref: '#/components/schemas/ErrorObject'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    SyncBatchResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          $ref: '#/components/schemas/SyncBatchResult'
+        error:
+          $ref: '#/components/schemas/ErrorObject'
+        meta:
+          $ref: '#/components/schemas/Meta'

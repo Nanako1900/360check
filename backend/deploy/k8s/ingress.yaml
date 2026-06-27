@@ -1,0 +1,37 @@
+# Ingress for the C5 API. Assumes a TKE Ingress controller (CLB-backed) or
+# nginx-ingress. TLS cert is provisioned out-of-band (Tencent SSL / cert-manager)
+# into the c5-api-tls Secret. Adjust host + ingressClassName to the cluster.
+#
+# China mainland: the public domain must have a valid ICP 备案 before the CLB
+# will serve it — see deploy/cloud-resources-checklist.md.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: c5-api
+  namespace: c5
+  labels:
+    app.kubernetes.io/name: c5
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: c5-backend
+  annotations:
+    # SSE export-progress stream + large media-confirm payloads: relax buffering/timeouts.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-body-size: "16m"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - api.example.com
+      secretName: c5-api-tls
+  rules:
+    - host: api.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: c5-api
+                port:
+                  name: http

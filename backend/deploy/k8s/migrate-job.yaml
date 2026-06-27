@@ -1,0 +1,54 @@
+# Runs golang-migrate (embedded in the c5-api binary via `c5-api migrate`) to the
+# latest schema BEFORE the api/worker rollout. golang-migrate takes a Postgres
+# advisory lock, so re-runs and concurrency are safe/idempotent.
+#
+# Apply this and wait for completion before applying the Deployments:
+#   kubectl -n c5 apply -f migrate-job.yaml
+#   kubectl -n c5 wait --for=condition=complete job/c5-migrate --timeout=300s
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: c5-migrate
+  namespace: c5
+  labels:
+    app.kubernetes.io/name: c5
+    app.kubernetes.io/component: migrate
+    app.kubernetes.io/part-of: c5-backend
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: c5
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrate
+          image: ccr.ccs.tencentyun.com/c5/c5-api:latest
+          imagePullPolicy: IfNotPresent
+          args: ["migrate"]
+          envFrom:
+            - configMapRef:
+                name: c5-config
+            - secretRef:
+                name: c5-secret
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"

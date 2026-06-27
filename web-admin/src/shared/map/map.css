@@ -1,0 +1,133 @@
+/* 地图样式（§P4 / §10.4 反模板）：固定高度容器（防 CLS）、层级浮层、精心排版的 InfoWindow。 */
+
+.map-shell {
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow-2);
+  background: var(--color-canvas);
+  border: 1px solid rgba(15, 23, 42, 0.06);
+}
+
+.map-canvas {
+  display: block;
+}
+
+/* 加载/空态浮层：覆盖在地图画布上，半透明衬底突出层级。 */
+.map-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(243, 244, 246, 0.72);
+  backdrop-filter: blur(2px);
+  z-index: 2;
+}
+
+/* —— InfoWindow 内容卡（注入腾讯地图气泡内，故用原生类名，避免依赖 antd 作用域）—— */
+.map-info {
+  display: flex;
+  gap: var(--space-4);
+  min-width: 220px;
+  max-width: 320px;
+  padding: var(--space-3);
+  font-family: inherit;
+}
+
+.map-info__thumb {
+  flex: 0 0 64px;
+  width: 64px;
+  height: 64px;
+  border-radius: var(--radius-md);
+  background: linear-gradient(135deg, #e2e8f0, #cbd5e1);
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  color: #475569;
+  overflow: hidden;
+}
+
+.map-info__thumb--empty {
+  background: repeating-linear-gradient(45deg, #f1f5f9, #f1f5f9 6px, #e2e8f0 6px, #e2e8f0 12px);
+}
+
+.map-info__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.map-info__title {
+  font-weight: 600;
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--color-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.map-info__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.map-info__chip {
+  font-size: 12px;
+  line-height: 1.6;
+  padding-inline: var(--space-3);
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  color: #475569;
+  white-space: nowrap;
+}
+
+.map-info__actions {
+  display: flex;
+  gap: var(--space-3);
+  margin-block-start: var(--space-2);
+}
+
+.map-info__btn {
+  appearance: none;
+  cursor: pointer;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #334155;
+  font-size: 12px;
+  line-height: 1.6;
+  padding-inline: var(--space-4);
+  border-radius: var(--radius-sm);
+  transition:
+    background var(--duration-fast) var(--ease-out-expo),
+    border-color var(--duration-fast) var(--ease-out-expo),
+    transform var(--duration-fast) var(--ease-out-expo);
+}
+
+.map-info__btn:hover {
+  border-color: var(--ant-color-primary, #635bff);
+  color: var(--ant-color-primary, #635bff);
+}
+
+.map-info__btn:active {
+  transform: translateY(1px);
+}
+
+.map-info__btn:focus-visible {
+  outline: 2px solid var(--ant-color-primary, #635bff);
+  outline-offset: 2px;
+}
+
+.map-info__btn--primary {
+  background: var(--ant-color-primary, #635bff);
+  border-color: var(--ant-color-primary, #635bff);
+  color: #ffffff;
+}
+
+.map-info__btn--primary:hover {
+  filter: brightness(1.05);
+  color: #ffffff;
+}

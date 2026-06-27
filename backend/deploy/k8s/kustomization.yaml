@@ -1,0 +1,36 @@
+# Base kustomization for the C5 backend on TKE.
+#
+# secret.example.yaml is a TEMPLATE and is intentionally NOT included here — create
+# the real `c5-secret` out-of-band (kubectl create secret / external-secrets) so
+# real credentials never live in the manifest tree.
+#
+# Apply order (the migrate Job must complete before the Deployments roll):
+#   kubectl apply -f namespace.yaml
+#   kubectl -n c5 apply -f configmap.yaml
+#   kubectl -n c5 apply -f <your real c5-secret>
+#   kubectl -n c5 apply -f migrate-job.yaml
+#   kubectl -n c5 wait --for=condition=complete job/c5-migrate --timeout=300s
+#   kubectl apply -k .            # api + worker + services + hpa + ingress
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: c5
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: c5-backend
+    includeSelectors: false
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - api-deployment.yaml
+  - api-service.yaml
+  - api-hpa.yaml
+  - worker-deployment.yaml
+  - worker-hpa.yaml
+  - ingress.yaml
+# Centralize image tags here; override per-environment with a kustomize overlay or
+#   kustomize edit set image ccr.ccs.tencentyun.com/c5/c5-api=...:<sha>
+images:
+  - name: ccr.ccs.tencentyun.com/c5/c5-api
+    newTag: latest
+  - name: ccr.ccs.tencentyun.com/c5/c5-worker
+    newTag: latest

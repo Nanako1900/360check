@@ -1,0 +1,60 @@
+# ─────────────────────────────────────────────────────────────
+# Root .gitignore — defense-in-depth over backend/ & web-admin/
+# subtree .gitignore files. Keeps secrets, build output, vendor
+# SDKs, and local agent/editor state out of the repo.
+# ─────────────────────────────────────────────────────────────
+
+# ── OS / editor ──
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+.vscode/
+
+# ── Local agent / tooling state (machine-local, never shared) ──
+.omc/
+.opencode/
+.claude/
+**/.omc/
+**/.claude/settings.local.json
+
+# ── Vendor SDKs (Insta360 — obtained out-of-band, NOT redistributed;
+#    contains a 275MB demo APK > GitHub's 100MB limit. See README) ──
+/Android-SDK/
+/Android-SDK-V1.10.1/
+
+# ── Node / web-admin build output & deps ──
+node_modules/
+dist/
+dist-ssr/
+coverage/
+playwright-report/
+test-results/
+.vite/
+*.local
+
+# ── Go / backend binaries & test output ──
+/backend/c5-api
+/backend/c5-worker
+/backend/bin/
+/backend/out/
+*.test
+*.out
+
+# ── Secrets — NEVER commit (templates *.example are allowed) ──
+.env
+.env.*
+!.env.example
+!.env.development
+**/secret.yaml
+**/secret.yml
+config.local.yaml
+*.pem
+*.key
+*.p12
+id_rsa*
+id_ed25519*
+
+# ── Logs ──
+*.log

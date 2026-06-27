@@ -1,0 +1,16 @@
+node_modules
+dist
+dist-ssr
+coverage
+playwright-report
+test-results
+*.local
+.env.local
+.env.*.local
+.DS_Store
+*.log
+.vite
+
+# agent-state junk (do not commit)
+.omc/
+**/.omc/

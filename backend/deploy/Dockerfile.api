@@ -1,0 +1,15 @@
+# syntax=docker/dockerfile:1
+# Multi-stage build for c5-api -> distroless static (nonroot).
+FROM golang:1.24-alpine AS builder
+WORKDIR /src
+RUN apk add --no-cache git ca-certificates
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/c5-api ./cmd/api
+
+FROM gcr.io/distroless/static:nonroot
+COPY --from=builder /out/c5-api /c5-api
+EXPOSE 8080
+USER nonroot:nonroot
+ENTRYPOINT ["/c5-api"]

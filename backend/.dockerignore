@@ -1,0 +1,17 @@
+.git
+.github
+Android-SDK
+Android-SDK-V1.10.1
+web-admin
+node_modules
+docs
+deploy
+*.docx
+*.md
+.omc
+.opencode
+.env
+.env.*
+coverage.*
+*.out
+.DS_Store
