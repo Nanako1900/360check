@@ -18,9 +18,11 @@ import '@fontsource/inter/600.css'
 import '@fontsource/inter/700.css'
 import '@/styles/global.css'
 
-/** 后端未就绪时按 openapi.yaml mock（VITE_ENABLE_MSW=true）。 */
+/** 后端未就绪时按 openapi.yaml mock（仅开发模式 + VITE_ENABLE_MSW=true）。 */
 async function enableMocking(): Promise<void> {
-  if (!env.VITE_ENABLE_MSW) return
+  // import.meta.env.DEV 是 Vite 构建期常量：生产 `vite build` 下为 false → 本分支与
+  // import('./mocks/browser')(~300KB MSW worker) 被静态消除，绝不进生产包（部署硬约束）。
+  if (!import.meta.env.DEV || !env.VITE_ENABLE_MSW) return
   const { worker } = await import('./mocks/browser')
   await worker.start({ onUnhandledRequest: 'bypass' })
 }

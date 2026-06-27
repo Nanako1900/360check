@@ -1,0 +1,29 @@
+# C5 web-admin — Coolify / Docker Compose 服务片段（交给后端团队合并）。
+#
+# 用法：把下面 `services:` 下的 `web:` 块合并进仓库【根】docker-compose.yaml，与后端 api 同栈。
+# 约束（与本仓库 deploy 资产一致）：
+#   · 不写自定义 networks（用 Compose 默认网络，服务名即内部 DNS：web→api 直接用主机名 `api`）。
+#   · 仅 web 暴露公网域名；web 容器监听 8080（nginx-unprivileged，非 root）。
+#   · web 内 nginx 把 /api/* 同源反代到 api:8080（见 deploy/nginx.conf）→ 单域名、免 CORS。
+#
+# Coolify 变量（★ 全部勾选 "Build Variable"，否则 Vite 在 build 时拿不到值，VITE_* 不会内联）：
+#   VITE_API_BASE_URL=/api/v1
+#   VITE_MAP_KEY=<腾讯地图 key；并在腾讯地图控制台把本服务的 Coolify 域名加入该 key 域名白名单>
+#   VITE_CDN_BASE=<COS/CDN 基址；当前为预留值，媒体 URL 由 GET /api/v1/media/{id} 返回完整签名>
+#   VITE_ENABLE_MSW=false   ← 生产必须关闭（且生产构建已结构性剔除 MSW）
+services:
+  web:
+    build:
+      context: ./web-admin
+      dockerfile: deploy/Dockerfile
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api/v1}
+        VITE_MAP_KEY: ${VITE_MAP_KEY}
+        VITE_CDN_BASE: ${VITE_CDN_BASE}
+        VITE_ENABLE_MSW: "false"
+    environment:
+      # 仅 web 暴露公网域名；_8080 = 容器端口（标识符 WEB 不含下划线 → 可带端口后缀 _8080）。
+      - SERVICE_FQDN_WEB_8080
+    depends_on:
+      - api
+    restart: unless-stopped
