@@ -12,4 +12,8 @@ FROM gcr.io/distroless/static:nonroot
 COPY --from=builder /out/c5-api /c5-api
 EXPOSE 8080
 USER nonroot:nonroot
+# Self-contained health probe (distroless has no curl/wget): the binary's own
+# `healthcheck` subcommand GETs /livez. A Dockerfile HEALTHCHECK takes precedence
+# over Coolify's UI health check and feeds compose `service_healthy` gating.
+HEALTHCHECK --interval=10s --timeout=3s --retries=3 --start-period=20s CMD ["/c5-api", "healthcheck"]
 ENTRYPOINT ["/c5-api"]

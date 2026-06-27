@@ -71,6 +71,13 @@ func main() {
 		return
 	}
 
+	// `c5-api healthcheck` GETs the local /livez probe and exits 0 on a 2xx, else 1.
+	// Lets the distroless runtime image (no curl/wget) self-report health for the
+	// Dockerfile HEALTHCHECK / Coolify without shipping an extra tool.
+	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
+		os.Exit(runHealthcheck())
+	}
+
 	if err := run(logger); err != nil {
 		logger.Error("fatal", slog.String("error", err.Error()))
 		os.Exit(1)
@@ -81,12 +88,16 @@ func main() {
 // (embedded), then returns. Safe to re-run: golang-migrate takes a Postgres
 // advisory lock and is idempotent.
 func runMigrate(logger *slog.Logger) error {
-	cfg, err := config.Load()
-	if err != nil {
-		return err
+	// migrate needs ONLY the database URL — not Redis/JWT — so it reads C5_DB_DSN
+	// directly instead of the full fail-fast config.Load(). This lets the one-shot
+	// compose / k8s migrate container carry just C5_DB_DSN (config.Load would reject
+	// it for missing C5_REDIS_ADDR / C5_JWT_SECRET it never uses).
+	dsn := os.Getenv("C5_DB_DSN")
+	if dsn == "" {
+		return fmt.Errorf("C5_DB_DSN is required to run migrations")
 	}
 	logger.Info("running database migrations")
-	if err := db.RunMigrations(cfg.DB.DSN, migrations.FS); err != nil {
+	if err := db.RunMigrations(dsn, migrations.FS); err != nil {
 		return err
 	}
 	logger.Info("database migrations applied")
@@ -143,6 +154,29 @@ func runCreateAdmin(logger *slog.Logger) error {
 	}
 	logger.Info("bootstrap admin password set", slog.String("username", username))
 	return nil
+}
+
+// runHealthcheck probes http://127.0.0.1:$C5_SERVER_PORT/livez and returns 0 on a
+// 2xx response, else 1. Used by the Dockerfile HEALTHCHECK so the distroless image
+// needs no curl/wget. It reads the port straight from env (no config.Load) so it
+// stays dependency-free and fast.
+func runHealthcheck() int {
+	port := os.Getenv("C5_SERVER_PORT")
+	if port == "" {
+		port = "8080"
+	}
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get("http://127.0.0.1:" + port + "/livez")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "healthcheck: %v\n", err)
+		return 1
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return 0
+	}
+	fmt.Fprintf(os.Stderr, "healthcheck: unexpected status %d\n", resp.StatusCode)
+	return 1
 }
 
 func run(logger *slog.Logger) error {

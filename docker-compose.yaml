@@ -1,0 +1,163 @@
+# =============================================================================
+# C5 — 360 相机巡查标注系统 · Coolify / Docker Compose 部署清单（仓库根）。
+# Coolify「资源类型 = Docker Compose」指向本文件 → 宿主 `docker compose` 起栈 →
+# 仅 `web` 服务分配公网域名（Traefik 反代），其余服务同栈内部互通（服务名即 DNS）。
+#
+# 设计约束（务必遵守）：
+#   · 【绝不写自定义 networks:】——会让 Traefik 路由 504。同栈用服务名 DNS：
+#       postgres / redis / api / web 直接当主机名用（见 nginx /api→api:8080 反代）。
+#   · 密钥只经环境变量注入，仓库零硬编码；种子管理员出厂 LOCKED（'!'），无默认凭据。
+#   · 迁移幂等：`migrate` 一次性容器每次部署重跑；golang-migrate 按 version 幂等。
+#
+# Coolify「magic」变量（首次部署自动生成并持久化；本地用根 .env.example 模拟）：
+#   SERVICE_PASSWORD_DB     → postgres 密码 + C5_DB_DSN 口令段
+#   SERVICE_PASSWORD_REDIS  → redis requirepass + C5_REDIS_PASSWORD
+#   SERVICE_BASE64_64_JWT   → C5_JWT_SECRET（64 字符 ≥ 32 字节，满足 HS256 强度校验）
+#   SERVICE_FQDN_WEB_8080   → 分配给 web 的公网域名（容器端口 8080；仅此一个对外）
+#
+# 一次性建首位管理员（部署完成后，在 Coolify 的 api 容器终端跑【一次】，随后删除该变量）：
+#   /c5-api create-admin       # 读 C5_BOOTSTRAP_ADMIN_PASSWORD，bcrypt 落库；幂等
+# 切勿把 create-admin 放进每次部署（会每次重置管理员密码）。
+# =============================================================================
+
+services:
+  # --- PostgreSQL + PostGIS（官方 postgres 无 PostGIS 扩展，必须此镜像）---
+  postgres:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_USER: c5
+      POSTGRES_DB: c5
+      POSTGRES_PASSWORD: ${SERVICE_PASSWORD_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data   # 数据跨重部署存活（Postgres≤17 用挂载目录）
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U c5 -d c5"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+
+  # --- Redis（refresh token / asynq 队列在此，开 AOF + 卷持久化）---
+  redis:
+    image: redis:7
+    # sh -c + "$$VAR"：口令为空时退化为「无认证」而非缺参启动失败；非空则启用 requirepass。
+    command: sh -c 'redis-server --appendonly yes --requirepass "$$SERVICE_PASSWORD_REDIS"'
+    environment:
+      SERVICE_PASSWORD_REDIS: ${SERVICE_PASSWORD_REDIS}
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$SERVICE_PASSWORD_REDIS\" ping | grep -q PONG"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  # --- 一次性迁移容器（与 api 同镜像；每次部署先跑，幂等）---
+  migrate:
+    image: c5-api:local
+    build:
+      context: ./backend
+      dockerfile: deploy/Dockerfile.api
+    command: ["migrate"]
+    environment:
+      C5_DB_DSN: postgres://c5:${SERVICE_PASSWORD_DB}@postgres:5432/c5?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # restart:"no" 让 Coolify 自动把本一次性容器排除出栈健康聚合（Coolify 源码：restart:no
+    # 与 exclude_from_hc:true 等价触发排除）。故【不写 exclude_from_hc】——它是 Coolify 专有键，
+    # 普通 `docker compose` 校验会拒绝（additional property not allowed），破坏本地起栈/CI。
+    restart: "no"
+
+  # --- API（内部服务，不分配域名；HEALTHCHECK 已内置镜像）---
+  api:
+    image: c5-api:local
+    build:
+      context: ./backend
+      dockerfile: deploy/Dockerfile.api
+    environment:
+      C5_ENV: prod
+      C5_SERVER_PORT: "8080"
+      C5_SERVER_MODE: release
+      # api 仅经内部 web-nginx → Traefik 到达；XFF 链在内网。设 docker 私网段，让登录限流
+      # 取到【真实】ClientIP（默认空=取直连=折叠成代理 IP）。勿设过宽。
+      C5_SERVER_TRUSTED_PROXIES: "10.0.0.0/8,172.16.0.0/12"
+      C5_DB_DSN: postgres://c5:${SERVICE_PASSWORD_DB}@postgres:5432/c5?sslmode=disable
+      C5_REDIS_ADDR: redis:6379
+      C5_REDIS_PASSWORD: ${SERVICE_PASSWORD_REDIS}
+      C5_JWT_SECRET: ${SERVICE_BASE64_64_JWT}
+      C5_JWT_ISSUER: c5-api
+      C5_JWT_ACCESS_TTL: 15m
+      C5_JWT_REFRESH_TTL: 720h
+      # 首次建管理员用；建完即在 Coolify 删除此变量。
+      C5_BOOTSTRAP_ADMIN_PASSWORD: ${C5_BOOTSTRAP_ADMIN_PASSWORD:-}
+      # 腾讯云 COS / CDN（Coolify Secret 注入；本地留空 → media 走内存 mock，可正常启栈）。
+      C5_COS_SECRET_ID: ${C5_COS_SECRET_ID:-}
+      C5_COS_SECRET_KEY: ${C5_COS_SECRET_KEY:-}
+      C5_COS_APP_ID: ${C5_COS_APP_ID:-}
+      C5_COS_REGION: ${C5_COS_REGION:-ap-guangzhou}
+      C5_COS_BUCKET_ORIGINAL: ${C5_COS_BUCKET_ORIGINAL:-}
+      C5_COS_BUCKET_WEB: ${C5_COS_BUCKET_WEB:-}
+      C5_COS_BUCKET_THUMB: ${C5_COS_BUCKET_THUMB:-}
+      C5_COS_CDN_DOMAIN: ${C5_COS_CDN_DOMAIN:-}
+      C5_COS_STS_ROLE_ARN: ${C5_COS_STS_ROLE_ARN:-}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # --- asynq Worker（派生 web/thumb + Excel 导出 + reaper；内部服务）---
+  worker:
+    image: c5-worker:local
+    build:
+      context: ./backend
+      dockerfile: deploy/Dockerfile.worker
+    environment:
+      C5_ENV: prod
+      C5_DB_DSN: postgres://c5:${SERVICE_PASSWORD_DB}@postgres:5432/c5?sslmode=disable
+      C5_REDIS_ADDR: redis:6379
+      C5_REDIS_PASSWORD: ${SERVICE_PASSWORD_REDIS}
+      # config.Load() 对所有二进制统一 fail-fast 校验 JWT 密钥，worker 也须提供。
+      C5_JWT_SECRET: ${SERVICE_BASE64_64_JWT}
+      C5_COS_SECRET_ID: ${C5_COS_SECRET_ID:-}
+      C5_COS_SECRET_KEY: ${C5_COS_SECRET_KEY:-}
+      C5_COS_APP_ID: ${C5_COS_APP_ID:-}
+      C5_COS_REGION: ${C5_COS_REGION:-ap-guangzhou}
+      C5_COS_BUCKET_ORIGINAL: ${C5_COS_BUCKET_ORIGINAL:-}
+      C5_COS_BUCKET_WEB: ${C5_COS_BUCKET_WEB:-}
+      C5_COS_BUCKET_THUMB: ${C5_COS_BUCKET_THUMB:-}
+      C5_COS_CDN_DOMAIN: ${C5_COS_CDN_DOMAIN:-}
+      C5_COS_STS_ROLE_ARN: ${C5_COS_STS_ROLE_ARN:-}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # --- Web（SPA + nginx 同源 /api 反代；唯一对外暴露域名）---
+  # 由前端团队按其提示词提供（web-admin/deploy/compose.web.yaml），此处合并。
+  web:
+    build:
+      context: ./web-admin
+      dockerfile: deploy/Dockerfile
+      # VITE_* 在 build 时被 Vite 内联（公开值）；Coolify 须把这些变量勾选「Build Variable」。
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api/v1}
+        VITE_MAP_KEY: ${VITE_MAP_KEY:-}
+        VITE_CDN_BASE: ${VITE_CDN_BASE:-}
+        VITE_ENABLE_MSW: "false"
+    environment:
+      # 仅 web 暴露公网域名；_8080 = 容器端口（nginx-unprivileged 监听 8080）。
+      - SERVICE_FQDN_WEB_8080
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:
