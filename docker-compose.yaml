@@ -153,7 +153,9 @@ services:
         VITE_ENABLE_MSW: "false"
     environment:
       # 仅 web 暴露公网域名；_8080 = 容器端口（nginx-unprivileged 监听 8080）。
-      - SERVICE_FQDN_WEB_8080
+      # 必须用字典写法（与其它服务一致）：列表写法 `- SERVICE_FQDN_WEB_8080` 在
+      # Coolify 按字典合并注入环境变量时会冲突，报 "non-string key ...environment: 0"。
+      SERVICE_FQDN_WEB_8080: ${SERVICE_FQDN_WEB_8080:-}
     depends_on:
       - api
     restart: unless-stopped
