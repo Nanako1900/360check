@@ -233,13 +233,20 @@ func (c *Config) Validate() error {
 // no wildcard, path, query or fragment. Anything looser (e.g. "*", a path, or
 // http://) would let the CORS middleware reflect an unsafe Access-Control-Allow-Origin.
 func validateOrigin(o string) error {
-	if o == "" || strings.Contains(o, "*") {
-		return fmt.Errorf("invalid origin %q (no wildcard/empty)", o)
+	// "#" catches an empty trailing fragment ("https://h#") that url.Parse reports as
+	// Fragment=="" and would otherwise slip through; "*" rejects wildcards.
+	if o == "" || strings.ContainsAny(o, "*#") {
+		return fmt.Errorf("invalid origin %q (no wildcard/empty/fragment)", o)
 	}
 	u, err := url.Parse(o)
-	if err != nil || u.Scheme != "https" || u.Host == "" ||
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil ||
 		u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
-		return fmt.Errorf("invalid origin %q (want https://host, no path/query/fragment)", o)
+		return fmt.Errorf("invalid origin %q (want https://host[:port], no userinfo/path/query/fragment)", o)
+	}
+	// A trailing-dot FQDN ("https://admin.x.com.") is a valid URL but never matches a
+	// browser Origin header — reject so the typo fails fast at boot, not at first request.
+	if strings.HasSuffix(u.Hostname(), ".") {
+		return fmt.Errorf("invalid origin %q (trailing-dot host won't match browser Origin)", o)
 	}
 	return nil
 }

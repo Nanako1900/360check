@@ -115,6 +115,10 @@ func TestValidate_CORSAllowedOrigins_ProdBadRejected(t *testing.T) {
 		"https://admin.x.com/",     // trailing slash
 		"https://admin.x.com?q=1",  // query
 		"admin.x.com",              // no scheme
+		"https://u@admin.x.com",    // userinfo
+		"https://u:p@admin.x.com",  // userinfo with password
+		"https://admin.x.com#",     // empty trailing fragment
+		"https://admin.x.com.",     // trailing-dot FQDN
 	} {
 		c := corsBase()
 		c.Server.AllowedOrigins = []string{bad}
@@ -124,7 +128,8 @@ func TestValidate_CORSAllowedOrigins_ProdBadRejected(t *testing.T) {
 
 func TestValidate_CORSAllowedOrigins_ProdValidOK(t *testing.T) {
 	c := corsBase()
-	c.Server.AllowedOrigins = []string{"https://admin.x.com", "https://admin.example.cn"}
+	// A non-default port is a legitimate Origin and must be accepted.
+	c.Server.AllowedOrigins = []string{"https://admin.x.com", "https://admin.example.cn", "https://admin.x.com:8443"}
 	assert.NoError(t, c.Validate())
 }
 
