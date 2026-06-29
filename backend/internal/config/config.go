@@ -6,6 +6,7 @@ package config
 import (
 	"fmt"
 	"net/netip"
+	"net/url"
 	"strings"
 	"time"
 
@@ -32,6 +33,10 @@ type ServerConfig struct {
 	// client IP from X-Forwarded-For. Empty => trust none (ClientIP is the direct
 	// peer), so a client cannot spoof its IP to bypass the per-IP auth rate limit.
 	TrustedProxies []string
+	// AllowedOrigins is the exact CORS allow-list (browser Origins) permitted to
+	// call the API cross-origin. Required (non-empty, https, no wildcard/path) in
+	// prod once the SPA is served from a different origin (e.g. EdgeOne Pages).
+	AllowedOrigins []string
 }
 
 // DBConfig controls the PostgreSQL (PostGIS) connection pool.
@@ -97,6 +102,7 @@ func Load() (*Config, error) {
 	for _, k := range []string{
 		"db.dsn", "redis.addr", "redis.password",
 		"server.trusted_proxies",
+		"cors.allowed_origins",
 		"jwt.secret",
 		"cos.secret_id", "cos.secret_key", "cos.app_id", "cos.bucket_original",
 		"cos.bucket_web", "cos.bucket_thumb", "cos.cdn_domain", "cos.sts_role_arn",
@@ -126,6 +132,7 @@ func Load() (*Config, error) {
 			Mode:            v.GetString("server.mode"),
 			ShutdownTimeout: v.GetDuration("server.shutdown_timeout"),
 			TrustedProxies:  splitCSV(v.GetString("server.trusted_proxies")),
+			AllowedOrigins:  splitCSV(v.GetString("cors.allowed_origins")),
 		},
 		DB: DBConfig{
 			DSN:         v.GetString("db.dsn"),
@@ -205,6 +212,34 @@ func (c *Config) Validate() error {
 			continue
 		}
 		return fmt.Errorf("C5_SERVER_TRUSTED_PROXIES: invalid CIDR/IP %q", p)
+	}
+	// CORS allow-list: required in prod (the SPA is served cross-origin from EdgeOne
+	// Pages). Each entry must be an exact https Origin — no wildcard, no path — so the
+	// middleware can echo it safely and never reflect an attacker-controlled value.
+	if c.Env == "prod" {
+		if len(c.Server.AllowedOrigins) == 0 {
+			return fmt.Errorf("C5_CORS_ALLOWED_ORIGINS is required in prod (exact https origins, comma-separated)")
+		}
+		for _, o := range c.Server.AllowedOrigins {
+			if err := validateOrigin(o); err != nil {
+				return fmt.Errorf("C5_CORS_ALLOWED_ORIGINS: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+// validateOrigin enforces that o is an exact https web Origin: a scheme+host with
+// no wildcard, path, query or fragment. Anything looser (e.g. "*", a path, or
+// http://) would let the CORS middleware reflect an unsafe Access-Control-Allow-Origin.
+func validateOrigin(o string) error {
+	if o == "" || strings.Contains(o, "*") {
+		return fmt.Errorf("invalid origin %q (no wildcard/empty)", o)
+	}
+	u, err := url.Parse(o)
+	if err != nil || u.Scheme != "https" || u.Host == "" ||
+		u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("invalid origin %q (want https://host, no path/query/fragment)", o)
 	}
 	return nil
 }

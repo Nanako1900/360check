@@ -88,3 +88,60 @@ func TestLoad_FailFastWhenMissing(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missing required configuration")
 }
+
+// corsBase returns a prod config with the always-required secrets present, so
+// only the CORS-origin rules are under test.
+func corsBase() *Config {
+	c := &Config{Env: "prod"}
+	c.DB.DSN = "postgres://localhost/c5"
+	c.Redis.Addr = "localhost:6379"
+	c.JWT.Secret = "a-sufficiently-long-test-secret-0123456789"
+	return c
+}
+
+func TestValidate_CORSAllowedOrigins_ProdEmptyRejected(t *testing.T) {
+	c := corsBase()
+	err := c.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "C5_CORS_ALLOWED_ORIGINS")
+}
+
+func TestValidate_CORSAllowedOrigins_ProdBadRejected(t *testing.T) {
+	for _, bad := range []string{
+		"*",                        // wildcard
+		"https://*.x.com",          // wildcard host
+		"http://admin.x.com",       // not https
+		"https://admin.x.com/app",  // has path
+		"https://admin.x.com/",     // trailing slash
+		"https://admin.x.com?q=1",  // query
+		"admin.x.com",              // no scheme
+	} {
+		c := corsBase()
+		c.Server.AllowedOrigins = []string{bad}
+		assert.Errorf(t, c.Validate(), "expected %q to be rejected", bad)
+	}
+}
+
+func TestValidate_CORSAllowedOrigins_ProdValidOK(t *testing.T) {
+	c := corsBase()
+	c.Server.AllowedOrigins = []string{"https://admin.x.com", "https://admin.example.cn"}
+	assert.NoError(t, c.Validate())
+}
+
+func TestValidate_CORSAllowedOrigins_NonProdEmptyOK(t *testing.T) {
+	c := corsBase()
+	c.Env = "dev"
+	c.Server.AllowedOrigins = nil
+	assert.NoError(t, c.Validate())
+}
+
+func TestLoad_CORSAllowedOrigins_ParsedFromCSV(t *testing.T) {
+	t.Setenv("C5_DB_DSN", "postgres://u:p@localhost:5432/c5")
+	t.Setenv("C5_REDIS_ADDR", "localhost:6379")
+	t.Setenv("C5_JWT_SECRET", "a-sufficiently-long-test-secret-0123456789")
+	t.Setenv("C5_CORS_ALLOWED_ORIGINS", "https://admin.x.com, https://admin2.x.com")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Equal(t, []string{"https://admin.x.com", "https://admin2.x.com"}, cfg.Server.AllowedOrigins)
+}
