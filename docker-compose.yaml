@@ -1,19 +1,28 @@
 # =============================================================================
 # C5 — 360 相机巡查标注系统 · Coolify / Docker Compose 部署清单（仓库根）。
 # Coolify「资源类型 = Docker Compose」指向本文件 → 宿主 `docker compose` 起栈 →
-# 仅 `web` 服务分配公网域名（Traefik 反代），其余服务同栈内部互通（服务名即 DNS）。
+# 仅 `api` 服务分配公网域名（Traefik 反代），其余服务同栈内部互通（服务名即 DNS）。
+#
+# 拓扑（前后端分离，见 docs/superpowers/specs/2026-06-29-前后端分离部署）：
+#   · 前端 SPA 独立部署在 EdgeOne Pages（admin.x.com），不在本栈内。
+#   · 后端 api 暴露公网（api.x.com），浏览器 + APP 跨域调用；api 开启 CORS 白名单。
 #
 # 设计约束（务必遵守）：
 #   · 【绝不写自定义 networks:】——会让 Traefik 路由 504。同栈用服务名 DNS：
-#       postgres / redis / api / web 直接当主机名用（见 nginx /api→api:8080 反代）。
+#       postgres / redis / api 直接当主机名用。
 #   · 密钥只经环境变量注入，仓库零硬编码；种子管理员出厂 LOCKED（'!'），无默认凭据。
 #   · 迁移幂等：`migrate` 一次性容器每次部署重跑；golang-migrate 按 version 幂等。
+#   · 【CORS】C5_CORS_ALLOWED_ORIGINS 必须精确到前端域（如 https://admin.x.com），禁 `*`。
+#   · 【限流 ClientIP】C5_SERVER_TRUSTED_PROXIES 必须收窄到 Coolify 代理(Traefik)的确切
+#       子网/IP；过宽（如 10/8）会被伪造 X-Forwarded-For 绕过登录限流（见 spec MUST-FIX 2）。
+#       默认留空=不信任任何代理=取直连 IP（防伪造，但 per-IP 限流会折叠到代理 IP）。
+#   · 【/metrics】仅在 api 内网端口 :9090 暴露（不经 Traefik），公网 8080 不含 /metrics。
 #
 # Coolify「magic」变量（首次部署自动生成并持久化；本地用根 .env.example 模拟）：
 #   SERVICE_PASSWORD_DB     → postgres 密码 + C5_DB_DSN 口令段
 #   SERVICE_PASSWORD_REDIS  → redis requirepass + C5_REDIS_PASSWORD
 #   SERVICE_BASE64_64_JWT   → C5_JWT_SECRET（64 字符 ≥ 32 字节，满足 HS256 强度校验）
-#   SERVICE_FQDN_WEB_8080   → 分配给 web 的公网域名（容器端口 8080；仅此一个对外）
+#   SERVICE_FQDN_API_8080   → 分配给 api 的公网域名（容器端口 8080；仅此一个对外）
 #
 # 一次性建首位管理员（部署完成后，在 Coolify 的 api 容器终端跑【一次】，随后删除该变量）：
 #   /c5-api create-admin       # 读 C5_BOOTSTRAP_ADMIN_PASSWORD，bcrypt 落库；幂等
@@ -81,9 +90,15 @@ services:
       C5_ENV: prod
       C5_SERVER_PORT: "8080"
       C5_SERVER_MODE: release
-      # api 仅经内部 web-nginx → Traefik 到达；XFF 链在内网。设 docker 私网段，让登录限流
-      # 取到【真实】ClientIP（默认空=取直连=折叠成代理 IP）。勿设过宽。
-      C5_SERVER_TRUSTED_PROXIES: "10.0.0.0/8,172.16.0.0/12"
+      # 仅 api 暴露公网域名；_8080 = 容器端口。必须字典写法（列表写法在 Coolify 按字典合并
+      # 环境变量时会冲突，报 "non-string key ...environment: 0"）。
+      SERVICE_FQDN_API_8080: ${SERVICE_FQDN_API_8080:-}
+      # CORS 白名单：精确到前端域（如 https://admin.x.com），禁 `*`；prod 下 config 会 fail-fast。
+      C5_CORS_ALLOWED_ORIGINS: ${C5_CORS_ALLOWED_ORIGINS:-}
+      # 登录限流按 ClientIP。api 现直接经 Traefik 暴露公网 → 必须把本值收窄到 Coolify 代理
+      # (Traefik) 的确切子网/IP，使 ClientIP 取到【真实】客户端 IP。过宽（如 10/8）会被伪造
+      # X-Forwarded-For 绕过限流（spec MUST-FIX 2）。默认留空=不信任代理=取直连 peer IP。
+      C5_SERVER_TRUSTED_PROXIES: ${C5_SERVER_TRUSTED_PROXIES:-}
       C5_DB_DSN: postgres://c5:${SERVICE_PASSWORD_DB}@postgres:5432/c5?sslmode=disable
       C5_REDIS_ADDR: redis:6379
       C5_REDIS_PASSWORD: ${SERVICE_PASSWORD_REDIS}
@@ -139,26 +154,10 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  # --- Web（SPA + nginx 同源 /api 反代；唯一对外暴露域名）---
-  # 由前端团队按其提示词提供（web-admin/deploy/compose.web.yaml），此处合并。
-  web:
-    build:
-      context: ./web-admin
-      dockerfile: deploy/Dockerfile
-      # VITE_* 在 build 时被 Vite 内联（公开值）；Coolify 须把这些变量勾选「Build Variable」。
-      args:
-        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api/v1}
-        VITE_MAP_KEY: ${VITE_MAP_KEY:-}
-        VITE_CDN_BASE: ${VITE_CDN_BASE:-}
-        VITE_ENABLE_MSW: "false"
-    environment:
-      # 仅 web 暴露公网域名；_8080 = 容器端口（nginx-unprivileged 监听 8080）。
-      # 必须用字典写法（与其它服务一致）：列表写法 `- SERVICE_FQDN_WEB_8080` 在
-      # Coolify 按字典合并注入环境变量时会冲突，报 "non-string key ...environment: 0"。
-      SERVICE_FQDN_WEB_8080: ${SERVICE_FQDN_WEB_8080:-}
-    depends_on:
-      - api
-    restart: unless-stopped
+  # --- Web（前端 SPA）已迁出本栈 ---
+  # 前端独立部署到腾讯云 EdgeOne Pages（admin.x.com）：其 CI 构建 + CDN 托管，经 CORS 跨域
+  # 调用 api。安全头 / CSP / SPA 回退见 web-admin/public/_headers · _redirects。
+  # 自托管整栈回退（web nginx 同源反代）见 web-admin/deploy/*（README 备选路径）。
 
 volumes:
   pgdata:
