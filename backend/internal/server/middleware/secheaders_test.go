@@ -26,5 +26,7 @@ func TestSecurityHeaders_SetOnEveryResponse(t *testing.T) {
 		assert.Equal(t, "DENY", h.Get("X-Frame-Options"), path)
 		assert.Equal(t, "strict-origin-when-cross-origin", h.Get("Referrer-Policy"), path)
 		assert.NotEmpty(t, h.Get("Permissions-Policy"), path)
+		// CORP must be cross-origin so the cross-origin SPA can read API responses.
+		assert.Equal(t, "cross-origin", h.Get("Cross-Origin-Resource-Policy"), path)
 	}
 }

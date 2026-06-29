@@ -15,7 +15,11 @@ const (
 	frameOptions        = "DENY"
 	referrerPolicy      = "strict-origin-when-cross-origin"
 	permissionsPolicy   = "camera=(), microphone=(), geolocation=()"
-	crossOriginResource = "same-site"
+	// crossOriginResource: this is a pure JSON API consumed cross-origin by the SPA
+	// (EdgeOne Pages) and, during grey-release, from cross-site preview domains.
+	// "same-site" would block those reads even with correct CORS, so "cross-origin"
+	// is required; CORP adds little for a JSON API guarded by CORS + auth anyway.
+	crossOriginResource = "cross-origin"
 )
 
 // SecurityHeaders sets transport/clickjacking/sniffing hardening headers on every
