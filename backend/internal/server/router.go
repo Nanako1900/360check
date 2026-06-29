@@ -5,7 +5,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 
 	"github.com/nnkglobal/c5-backend/internal/config"
@@ -43,7 +42,8 @@ type Deps struct {
 }
 
 // New builds the gin engine with the full middleware chain and mounts the P0
-// endpoints: /metrics (root, handwritten ops) and /api/v1/healthz (spec). Domain
+// endpoints: /livez, /readyz and /api/v1/healthz (spec). /metrics is served on a
+// separate internal-only port (see cmd/api), not on this public engine. Domain
 // handlers implementing oapi.ServerInterface are registered on apiV1 in P2+.
 func New(deps Deps) *gin.Engine {
 	gin.SetMode(deps.Cfg.Server.Mode)
@@ -59,9 +59,11 @@ func New(deps Deps) *gin.Engine {
 	}
 	httpMetrics := middleware.NewHTTPMetrics(deps.Registry)
 
-	// Chain: request id -> otel trace -> recover(panic->500 envelope) ->
-	// slog access log -> prometheus metrics.
+	// Chain: CORS (first, so preflight short-circuits and Allow-Origin is set in the
+	// request phase before any streaming handler flushes) -> request id -> otel trace
+	// -> recover(panic->500 envelope) -> slog access log -> prometheus metrics.
 	r.Use(
+		middleware.CORS(deps.Cfg.Server.AllowedOrigins),
 		middleware.RequestID(),
 		middleware.SecurityHeaders(),
 		otelgin.Middleware(deps.Cfg.Observ.ServiceName),
@@ -78,8 +80,10 @@ func New(deps Deps) *gin.Engine {
 		httpx.Fail(c, httpx.NewError(oapi.NOTFOUND, "resource not found"))
 	})
 
-	// Operational metrics endpoint (outside the generated spec router).
-	r.GET("/metrics", gin.WrapH(promhttp.HandlerFor(deps.Registry, promhttp.HandlerOpts{})))
+	// NOTE: /metrics is intentionally NOT mounted on this public engine. Once api is
+	// exposed to the internet (api.x.com), Prometheus exposition (route templates,
+	// latency histograms, Go/process internals) must not be public. cmd/api serves
+	// /metrics on a separate internal-only port via obs.NewHealthServer.
 
 	// Kubernetes probes at the root: /livez (liveness, process-only) and /readyz
 	// (readiness, DB+Redis). Distinct from the spec's /api/v1/healthz.

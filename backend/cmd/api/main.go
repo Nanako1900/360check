@@ -46,6 +46,11 @@ import (
 	"github.com/nnkglobal/c5-backend/internal/user"
 )
 
+// apiMetricsAddr is the api's internal-only health/metrics surface. The ingress
+// publishes ONLY the public API port (8080 via SERVICE_FQDN), so Prometheus
+// exposition served here stays off the internet. Mirrors cmd/worker's :9091.
+const apiMetricsAddr = ":9090"
+
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
@@ -288,6 +293,14 @@ func run(logger *slog.Logger) error {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
+	// Internal-only health/metrics surface (/livez, /readyz, /metrics). Bound to a
+	// separate port the ingress never publishes, so /metrics is unreachable from the
+	// internet once api.x.com points at the public 8080. Mirrors cmd/worker.
+	metricsSrv := obs.NewHealthServer(apiMetricsAddr, reg,
+		obs.ReadyCheck{Name: "postgres", Check: pool.Ping},
+		obs.ReadyCheck{Name: "redis", Check: rdb.Ping},
+	)
+
 	serverErr := make(chan error, 1)
 	go func() {
 		logger.Info("c5-api listening",
@@ -295,6 +308,12 @@ func run(logger *slog.Logger) error {
 			slog.String("env", cfg.Env),
 		)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serverErr <- err
+		}
+	}()
+	go func() {
+		logger.Info("c5-api metrics listening", slog.String("addr", apiMetricsAddr))
+		if err := metricsSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serverErr <- err
 		}
 	}()
@@ -314,6 +333,7 @@ func run(logger *slog.Logger) error {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		return err
 	}
+	_ = metricsSrv.Shutdown(shutdownCtx)
 	logger.Info("c5-api stopped cleanly")
 	return nil
 }
