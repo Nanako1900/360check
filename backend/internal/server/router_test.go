@@ -126,15 +126,18 @@ func TestReadyz_DBDown_503(t *testing.T) {
 	assert.Contains(t, resp.Error.Message, "db")
 }
 
-func TestMetricsEndpoint(t *testing.T) {
+func TestMetricsEndpoint_NotPublic(t *testing.T) {
+	// /metrics must NOT be reachable on the public engine: once api is internet-facing
+	// it would leak Prometheus internals. It is served on a separate internal port
+	// (cmd/api via obs.NewHealthServer); the public engine returns the NOT_FOUND envelope.
 	srv := newTestServer(t, nil, nil)
-	// drive one request so the histogram has a sample
-	srv.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/healthz", nil))
-
 	w := httptest.NewRecorder()
 	srv.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Contains(t, w.Body.String(), "c5_http_requests_total")
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+	var resp oapi.ErrorResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, oapi.NOTFOUND, resp.Error.Code)
 }
 
 func TestUnknownRoute_NotFoundEnvelope(t *testing.T) {
