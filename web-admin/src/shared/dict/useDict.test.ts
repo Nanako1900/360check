@@ -93,4 +93,26 @@ describe('fetchDict ETag/304 flow', () => {
     )
     await expect(fetchDict('nope')).rejects.toMatchObject({ code: 'NOT_FOUND' })
   })
+
+  it('degrades a 404 to an empty dict when optional (e.g. unconfigured project_field)', async () => {
+    let calls = 0
+    server.use(
+      msw.get(`${BASE}/dict/types/:code/items`, () => {
+        calls += 1
+        return HttpResponse.json(
+          {
+            success: false,
+            data: null,
+            error: { code: 'NOT_FOUND', message: '字典类型不存在', details: [] },
+            meta: null,
+          },
+          { status: 404 },
+        )
+      }),
+    )
+    // optional=true → 不抛错，退化为空字典（projects 自定义字段未配置时不应报错弹窗）。
+    const result = await fetchDict('project_field', true)
+    expect(result).toEqual({ items: [], version: 0, contentHash: '' })
+    expect(calls).toBe(1)
+  })
 })
