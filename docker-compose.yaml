@@ -27,9 +27,10 @@
 #   SERVICE_BASE64_64_JWT   → C5_JWT_SECRET（64 字符 ≥ 32 字节，满足 HS256 强度校验）
 #   SERVICE_FQDN_API_8080   → 分配给 api 的公网域名（容器端口 8080；仅此一个对外）
 #
-# 一次性建首位管理员（部署完成后，在 Coolify 的 api 容器终端跑【一次】，随后删除该变量）：
-#   /c5-api create-admin       # 读 C5_BOOTSTRAP_ADMIN_PASSWORD，bcrypt 落库；幂等
-# 切勿把 create-admin 放进每次部署（会每次重置管理员密码）。
+# 首位管理员（无需进容器终端）：在 Coolify 设 C5_BOOTSTRAP_ADMIN_PASSWORD(≥8 位)→重新部署，
+#   api 启动时自动用它初始化 admin —— 仅当 admin 仍出厂 LOCKED('!') 才设，故重复部署不覆盖后改
+#   的密码。用户名 admin（可选 C5_BOOTSTRAP_ADMIN_USERNAME）。登录后从 Coolify 删除此变量。
+#   （亦可手动：宿主机 `docker exec <api容器> /c5-api create-admin`；distroless 无 shell 不能进终端。）
 # =============================================================================
 
 services:
@@ -109,7 +110,8 @@ services:
       C5_JWT_ISSUER: c5-api
       C5_JWT_ACCESS_TTL: 15m
       C5_JWT_REFRESH_TTL: 720h
-      # 首次建管理员用；建完即在 Coolify 删除此变量。
+      # 首位管理员：设此变量(≥8 位)→重新部署，api 启动时自动初始化 admin（仅当仍出厂 LOCKED，
+      # 不会覆盖你后改的密码）；登录后从 Coolify 删除此变量。distroless 无 shell，无需进终端。
       C5_BOOTSTRAP_ADMIN_PASSWORD: ${C5_BOOTSTRAP_ADMIN_PASSWORD:-}
       # 腾讯云 COS / CDN（Coolify Secret 注入；本地留空 → media 走内存 mock，可正常启栈）。
       C5_COS_SECRET_ID: ${C5_COS_SECRET_ID:-}

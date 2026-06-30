@@ -161,6 +161,57 @@ func runCreateAdmin(logger *slog.Logger) error {
 	return nil
 }
 
+// lockedPasswordSentinel is the seed's LOCKED admin password_hash: an invalid bcrypt
+// hash that no password can match (db/migrations/000002_seed). The startup bootstrap
+// only initializes the admin while its hash is still this sentinel, so a redeploy never
+// overwrites a password an operator changed later.
+const lockedPasswordSentinel = "!"
+
+// bootstrapAdmin initializes the admin password from C5_BOOTSTRAP_ADMIN_PASSWORD at
+// startup when (a) the env var is set and 8-72 bytes, and (b) the admin is still
+// factory-LOCKED. No-op otherwise. This lets operators set the first admin password via
+// an environment variable + redeploy — no container shell needed (the distroless image
+// has none) — without ever baking a default credential into the image. Non-fatal: every
+// failure is logged and the server keeps serving.
+func bootstrapAdmin(ctx context.Context, q *gendb.Queries, logger *slog.Logger) {
+	password := os.Getenv("C5_BOOTSTRAP_ADMIN_PASSWORD")
+	if password == "" {
+		return // not requested
+	}
+	username := os.Getenv("C5_BOOTSTRAP_ADMIN_USERNAME")
+	if username == "" {
+		username = "admin"
+	}
+	if l := len(password); l < 8 || l > 72 {
+		logger.Warn("admin bootstrap skipped: C5_BOOTSTRAP_ADMIN_PASSWORD must be 8-72 bytes", slog.Int("len", l))
+		return
+	}
+	row, err := q.GetUserByUsername(ctx, username)
+	if err != nil {
+		logger.Warn("admin bootstrap skipped: user not found", slog.String("username", username), slog.String("error", err.Error()))
+		return
+	}
+	if row.PasswordHash != lockedPasswordSentinel {
+		logger.Info("admin bootstrap skipped: already initialized (remove C5_BOOTSTRAP_ADMIN_PASSWORD)", slog.String("username", username))
+		return
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), 12)
+	if err != nil {
+		logger.Warn("admin bootstrap failed: hash error", slog.String("error", err.Error()))
+		return
+	}
+	n, err := q.UpdateUserPassword(ctx, gendb.UpdateUserPasswordParams{
+		ID:           row.ID,
+		PasswordHash: string(hash),
+		UpdatedBy:    &row.ID,
+	})
+	if err != nil || n == 0 {
+		logger.Warn("admin bootstrap failed: update error", slog.Any("error", err), slog.Int64("rows", n))
+		return
+	}
+	logger.Info("admin bootstrap: initialized admin password from env — REMOVE C5_BOOTSTRAP_ADMIN_PASSWORD now", slog.String("username", username))
+}
+
 // runHealthcheck probes http://127.0.0.1:$C5_SERVER_PORT/livez and returns 0 on a
 // 2xx response, else 1. Used by the Dockerfile HEALTHCHECK so the distroless image
 // needs no curl/wget. It reads the port straight from env (no config.Load) so it
@@ -240,6 +291,16 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 	queries := gendb.New(pool.Pool)
+
+	// Auto-initialize the admin password from C5_BOOTSTRAP_ADMIN_PASSWORD on startup,
+	// but ONLY while the admin is still factory-LOCKED — so a redeploy never clobbers a
+	// password changed later. Lets operators bootstrap the first admin via an env var +
+	// redeploy without a container shell (the distroless image has none) and WITHOUT
+	// baking any default credential into the image.
+	bootstrapCtx, bootstrapCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	bootstrapAdmin(bootstrapCtx, queries, logger)
+	bootstrapCancel()
+
 	jwtMgr := jwt.NewManager(cfg.JWT.Secret, cfg.JWT.Issuer, cfg.JWT.AccessTTL)
 	refreshStore := auth.NewRefreshStore(rdb.Client, cfg.JWT.RefreshTTL)
 	authHandler := auth.NewHandler(auth.NewService(queries, jwtMgr, refreshStore, enforcer))
