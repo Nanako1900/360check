@@ -268,7 +268,10 @@ func TestCustomFields_ValidationGated(t *testing.T) {
 	assert.Equal(t, "custom_fields.bogus", ve.Details[0].Field)
 }
 
-// seedProjectFieldDict inserts a project_field dict_type and active items.
+// seedProjectFieldDict ensures the project_field dict_type exists and adds active
+// items. Migration 000003 already seeds an EMPTY project_field type, so upsert
+// (ON CONFLICT) to fetch its id whether or not the row pre-exists; the empty
+// baseline keeps validation disabled until items are added here.
 func seedProjectFieldDict(t *testing.T, pool *db.Pool, codes []string) {
 	t.Helper()
 	ctx := context.Background()
@@ -276,6 +279,7 @@ func seedProjectFieldDict(t *testing.T, pool *db.Pool, codes []string) {
 	require.NoError(t, pool.QueryRow(ctx, `
 		INSERT INTO dict_type (code, name, scope, is_active)
 		VALUES ('project_field', '项目字段', 'project_field', TRUE)
+		ON CONFLICT (code) DO UPDATE SET is_active = TRUE
 		RETURNING id`).Scan(&typeID))
 	for _, code := range codes {
 		_, err := pool.Exec(ctx, `
