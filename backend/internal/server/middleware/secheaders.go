@@ -10,11 +10,11 @@ const (
 	// hstsValue: 1 year, include subdomains. "preload" is intentionally omitted —
 	// it is an irreversible commitment to the browser preload list and should be a
 	// deliberate ops decision, not a code default.
-	hstsValue           = "max-age=31536000; includeSubDomains"
-	contentTypeOptions  = "nosniff"
-	frameOptions        = "DENY"
-	referrerPolicy      = "strict-origin-when-cross-origin"
-	permissionsPolicy   = "camera=(), microphone=(), geolocation=()"
+	hstsValue          = "max-age=31536000; includeSubDomains"
+	contentTypeOptions = "nosniff"
+	frameOptions       = "DENY"
+	referrerPolicy     = "strict-origin-when-cross-origin"
+	permissionsPolicy  = "camera=(), microphone=(), geolocation=()"
 	// crossOriginResource: this is a pure JSON API consumed cross-origin by the SPA
 	// (EdgeOne Pages) and, during grey-release, from cross-site preview domains.
 	// "same-site" would block those reads even with correct CORS, so "cross-origin"

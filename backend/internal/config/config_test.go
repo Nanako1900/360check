@@ -108,17 +108,17 @@ func TestValidate_CORSAllowedOrigins_ProdEmptyRejected(t *testing.T) {
 
 func TestValidate_CORSAllowedOrigins_ProdBadRejected(t *testing.T) {
 	for _, bad := range []string{
-		"*",                        // wildcard
-		"https://*.x.com",          // wildcard host
-		"http://admin.x.com",       // not https
-		"https://admin.x.com/app",  // has path
-		"https://admin.x.com/",     // trailing slash
-		"https://admin.x.com?q=1",  // query
-		"admin.x.com",              // no scheme
-		"https://u@admin.x.com",    // userinfo
-		"https://u:p@admin.x.com",  // userinfo with password
-		"https://admin.x.com#",     // empty trailing fragment
-		"https://admin.x.com.",     // trailing-dot FQDN
+		"*",                       // wildcard
+		"https://*.x.com",         // wildcard host
+		"http://admin.x.com",      // not https
+		"https://admin.x.com/app", // has path
+		"https://admin.x.com/",    // trailing slash
+		"https://admin.x.com?q=1", // query
+		"admin.x.com",             // no scheme
+		"https://u@admin.x.com",   // userinfo
+		"https://u:p@admin.x.com", // userinfo with password
+		"https://admin.x.com#",    // empty trailing fragment
+		"https://admin.x.com.",    // trailing-dot FQDN
 	} {
 		c := corsBase()
 		c.Server.AllowedOrigins = []string{bad}
