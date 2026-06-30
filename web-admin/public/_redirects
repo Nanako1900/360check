@@ -1,4 +1,0 @@
-# C5 web-admin — SPA 回退（EdgeOne Pages / Cloudflare Pages 兼容）。
-# Vite 把 public/ 原样复制到 dist/，平台据此对未命中静态文件的路由回退到应用外壳。
-# 静态文件（/assets/* 等）优先按真实文件返回，仅未命中的客户端路由回退 index.html。
-/*    /index.html    200
