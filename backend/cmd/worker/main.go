@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -44,6 +45,14 @@ const (
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
+
+	// `c5-worker healthcheck` GETs the local :9091/livez and exits 0 on 2xx, else 1.
+	// Used by the Dockerfile HEALTHCHECK so Coolify tracks worker health like every
+	// other stack service (parity with c5-api; no curl/wget needed).
+	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
+		os.Exit(runHealthcheck())
+	}
+
 	if err := run(logger); err != nil {
 		logger.Error("fatal", slog.String("error", err.Error()))
 		os.Exit(1)
@@ -179,4 +188,23 @@ func pingWithTimeout(ping func(context.Context) error, d time.Duration) error {
 	ctx, cancel := context.WithTimeout(context.Background(), d)
 	defer cancel()
 	return ping(ctx)
+}
+
+// runHealthcheck probes the worker's internal liveness endpoint (workerMetricsAddr
+// /livez) and returns 0 on a 2xx, else 1. Invoked as `c5-worker healthcheck` by the
+// Dockerfile HEALTHCHECK — self-contained so the image needs no curl/wget, mirroring
+// c5-api so Coolify reports worker health consistently across the stack.
+func runHealthcheck() int {
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get("http://127.0.0.1" + workerMetricsAddr + "/livez")
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "healthcheck: %v\n", err)
+		return 1
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return 0
+	}
+	_, _ = fmt.Fprintf(os.Stderr, "healthcheck: unexpected status %d\n", resp.StatusCode)
+	return 1
 }

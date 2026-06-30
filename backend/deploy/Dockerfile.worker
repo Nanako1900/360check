@@ -17,4 +17,8 @@ RUN apk add --no-cache ca-certificates tzdata font-noto-cjk fontconfig \
 ENV TZ=Asia/Shanghai
 COPY --from=builder /out/c5-worker /usr/local/bin/c5-worker
 USER nonroot
+# Self-contained liveness probe (parity with c5-api): the binary's `healthcheck`
+# subcommand GETs the worker's internal :9091/livez. A Dockerfile HEALTHCHECK is what
+# Coolify honors for compose service-stack health, with no curl/wget dependency.
+HEALTHCHECK --interval=10s --timeout=3s --retries=3 --start-period=20s CMD ["/usr/local/bin/c5-worker", "healthcheck"]
 ENTRYPOINT ["/usr/local/bin/c5-worker"]

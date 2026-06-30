@@ -213,17 +213,25 @@ func (c *Config) Validate() error {
 		}
 		return fmt.Errorf("C5_SERVER_TRUSTED_PROXIES: invalid CIDR/IP %q", p)
 	}
-	// CORS allow-list: required in prod (the SPA is served cross-origin from EdgeOne
-	// Pages). Each entry must be an exact https Origin — no wildcard, no path — so the
-	// middleware can echo it safely and never reflect an attacker-controlled value.
-	if c.Env == "prod" {
-		if len(c.Server.AllowedOrigins) == 0 {
-			return fmt.Errorf("C5_CORS_ALLOWED_ORIGINS is required in prod (exact https origins, comma-separated)")
-		}
-		for _, o := range c.Server.AllowedOrigins {
-			if err := validateOrigin(o); err != nil {
-				return fmt.Errorf("C5_CORS_ALLOWED_ORIGINS: %w", err)
-			}
+	return nil
+}
+
+// ValidateServerCORS enforces a usable CORS allow-list for the public HTTP API in
+// prod. ONLY c5-api serves HTTP and calls this (from cmd/api). The worker, `migrate`
+// and `create-admin` paths share config.Load()/Validate() but have no HTTP server —
+// so CORS deliberately lives here, NOT in Validate(), letting those binaries boot in
+// prod without C5_CORS_ALLOWED_ORIGINS. Each entry must be an exact https Origin (no
+// wildcard/path) so the middleware echoes it safely and never reflects an unsafe value.
+func (c *Config) ValidateServerCORS() error {
+	if c.Env != "prod" {
+		return nil
+	}
+	if len(c.Server.AllowedOrigins) == 0 {
+		return fmt.Errorf("C5_CORS_ALLOWED_ORIGINS is required in prod (exact https origins, comma-separated)")
+	}
+	for _, o := range c.Server.AllowedOrigins {
+		if err := validateOrigin(o); err != nil {
+			return fmt.Errorf("C5_CORS_ALLOWED_ORIGINS: %w", err)
 		}
 	}
 	return nil

@@ -101,9 +101,17 @@ func corsBase() *Config {
 
 func TestValidate_CORSAllowedOrigins_ProdEmptyRejected(t *testing.T) {
 	c := corsBase()
-	err := c.Validate()
+	err := c.ValidateServerCORS()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "C5_CORS_ALLOWED_ORIGINS")
+}
+
+// Regression: worker / migrate / create-admin share config.Load()/Validate() but have
+// no HTTP server; prod must NOT require CORS for them (only cmd/api calls
+// ValidateServerCORS). Guards against the bug where worker crash-looped in prod.
+func TestValidate_NoCORSRequirement_ForNonHTTPBinaries(t *testing.T) {
+	c := corsBase() // Env=prod, DB/Redis/JWT set, no AllowedOrigins
+	assert.NoError(t, c.Validate())
 }
 
 func TestValidate_CORSAllowedOrigins_ProdBadRejected(t *testing.T) {
@@ -122,7 +130,7 @@ func TestValidate_CORSAllowedOrigins_ProdBadRejected(t *testing.T) {
 	} {
 		c := corsBase()
 		c.Server.AllowedOrigins = []string{bad}
-		assert.Errorf(t, c.Validate(), "expected %q to be rejected", bad)
+		assert.Errorf(t, c.ValidateServerCORS(), "expected %q to be rejected", bad)
 	}
 }
 
@@ -130,14 +138,14 @@ func TestValidate_CORSAllowedOrigins_ProdValidOK(t *testing.T) {
 	c := corsBase()
 	// A non-default port is a legitimate Origin and must be accepted.
 	c.Server.AllowedOrigins = []string{"https://admin.x.com", "https://admin.example.cn", "https://admin.x.com:8443"}
-	assert.NoError(t, c.Validate())
+	assert.NoError(t, c.ValidateServerCORS())
 }
 
 func TestValidate_CORSAllowedOrigins_NonProdEmptyOK(t *testing.T) {
 	c := corsBase()
 	c.Env = "dev"
 	c.Server.AllowedOrigins = nil
-	assert.NoError(t, c.Validate())
+	assert.NoError(t, c.ValidateServerCORS())
 }
 
 func TestLoad_CORSAllowedOrigins_ParsedFromCSV(t *testing.T) {
