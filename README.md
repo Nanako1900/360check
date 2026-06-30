@@ -78,7 +78,7 @@ Coolify「资源类型 = Docker Compose」指向仓库根 [`docker-compose.yaml`
 - **`/metrics`**：仅在 api 内网端口 `:9090` 暴露（不经 Traefik），公网 `8080` 不含 `/metrics`。
 - **腾讯云 COS / CDN**：`C5_COS_*` 经 Coolify Secret 注入；宿主需能出网 `*.myqcloud.com` 及 CDN 域。COS 桶需对前端域配 CORS（全景图 WebGL 跨域加载）。
 - **迁移幂等**：`migrate` 容器每次部署重跑 `c5-api migrate`（golang-migrate 按 version 幂等，持 advisory lock）；`restart:"no"` → Coolify 自动排除出栈健康聚合。`api` 经 `depends_on: migrate(service_completed_successfully)` 等其完成。
-- **首位管理员（一次性）**：种子管理员出厂 LOCKED（`'!'`，无默认凭据）。部署后在 Coolify 的 `api` 容器终端跑【一次】 `/c5-api create-admin`（读 `C5_BOOTSTRAP_ADMIN_PASSWORD`），**随后删除该变量**。
+- **首位管理员（无默认凭据，无需终端）**：种子管理员出厂 LOCKED（`'!'`）。在 Coolify 设 `C5_BOOTSTRAP_ADMIN_PASSWORD`（≥8 位）→ 重新部署 → **api 启动时自动初始化 admin**（仅当仍出厂 LOCKED 才设，重复部署不覆盖后改密码；用户名默认 `admin`，可选 `C5_BOOTSTRAP_ADMIN_USERNAME`）。登录后**从 Coolify 删除该变量**。distroless 镜像无 shell，故走「启动自动初始化」而非容器终端；也可手动 `docker exec <api容器> /c5-api create-admin`。
 - **本地验证**：`cp .env.example .env && docker compose up --build`。`api` 的 Dockerfile 内置 `HEALTHCHECK`（distroless 无 curl，二进制自带 `healthcheck` 子命令探 `/livez`）。
 
 ### 自托管整栈（备选）
