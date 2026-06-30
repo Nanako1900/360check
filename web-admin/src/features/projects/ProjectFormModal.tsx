@@ -55,7 +55,8 @@ export function ProjectFormModal({ open, editing, onClose, onSuccess }: ProjectF
   const updateProject = useUpdateProject()
   const isEdit = Boolean(editing)
 
-  const { data: fieldDict } = useDict('project_field', open)
+  // project_field 为可选字典（管理员配置）：未配置时优雅降级为空，不报错（optional=true）。
+  const { data: fieldDict } = useDict('project_field', open, true)
   const fieldDefs = useMemo(() => toFieldDefs(fieldDict?.items ?? []), [fieldDict])
 
   useEffect(() => {

@@ -35,7 +35,8 @@ export function ProjectDetailPage() {
   const projectId = Number(id)
 
   const { data: project, isLoading, isError } = useProject(projectId)
-  const { data: fieldDict } = useDict('project_field')
+  // project_field 为可选字典（管理员配置）：未配置时优雅降级为空，不报错（optional=true）。
+  const { data: fieldDict } = useDict('project_field', true, true)
   const cfEntries = useMemo(
     () => customFieldEntries(project?.custom_fields, fieldDict?.items ?? []),
     [project, fieldDict],
