@@ -17,6 +17,9 @@
 #       子网/IP；过宽（如 10/8）会被伪造 X-Forwarded-For 绕过登录限流（见 spec MUST-FIX 2）。
 #       默认留空=不信任任何代理=取直连 IP（防伪造，但 per-IP 限流会折叠到代理 IP）。
 #   · 【/metrics】仅在 api 内网端口 :9090 暴露（不经 Traefik），公网 8080 不含 /metrics。
+#   · 【健康检查】api/worker 各自 Dockerfile HEALTHCHECK（二进制 `healthcheck` 子命令探 /livez，
+#       distroless/alpine 均免 curl/wget）；postgres/redis 用 compose healthcheck；migrate 用
+#       restart:"no" 排除出健康聚合。Coolify 据此逐服务报健康（带域名的 api 健康失败→Traefik 404）。
 #
 # Coolify「magic」变量（首次部署自动生成并持久化；本地用根 .env.example 模拟）：
 #   SERVICE_PASSWORD_DB     → postgres 密码 + C5_DB_DSN 口令段
