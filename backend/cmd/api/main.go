@@ -189,6 +189,12 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	// CORS allow-list is mandatory for the public API in prod. Checked here (not in the
+	// shared config.Validate) so the worker / migrate / create-admin paths, which have
+	// no HTTP server, are not forced to carry C5_CORS_ALLOWED_ORIGINS.
+	if err := cfg.ValidateServerCORS(); err != nil {
+		return err
+	}
 
 	// OpenTelemetry tracing (no-op unless C5_OBSERV_OTLP_ENDPOINT is set). otelgin
 	// then exports real spans to the in-cluster collector.
