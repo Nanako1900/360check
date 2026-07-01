@@ -6,6 +6,9 @@
   height: 100vh;
   overflow: hidden;
   background: var(--color-canvas, #f3f4f6);
+  /* 建立独立层叠上下文：让所有悬浮层的 z-index 只相对本容器计算，
+     并把地图容器内腾讯 GL 注入的高 z-index DOM 关在下面（否则会盖住菜单，导致点不到）。 */
+  isolation: isolate;
 }
 
 .map-home__canvas {
@@ -13,6 +16,9 @@
   inset: 0;
   width: 100%;
   height: 100%;
+  /* z-index:0 使地图容器成为层叠上下文 —— 腾讯地图内部 DOM 的 z-index 被困在此层，
+     永远低于下方各悬浮层（z-index ≥ 10），保证顶栏/侧栏/控件/卡片可点击。 */
+  z-index: 0;
 }
 
 /* 通用毛玻璃浮层底 */
@@ -139,9 +145,13 @@
   padding: var(--space-6, 24px);
   background: rgba(243, 244, 246, 0.78);
   backdrop-filter: blur(2px);
+  /* 浮层本身不吃点击：地图 SDK 就绪后（如「无带范围项目」态）仍可拖动地图、
+     悬浮菜单也照常可用；仅中间的信息框接收交互。 */
+  pointer-events: none;
 }
 
 .map-home__overlay-box {
   max-width: 420px;
   text-align: center;
+  pointer-events: auto;
 }
