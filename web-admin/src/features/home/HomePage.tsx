@@ -23,7 +23,9 @@ export function HomePage() {
   const { data: stats } = useStatsOverview({}, canStats)
 
   // 功能入口卡片：排除「工作台」自身，按权限过滤（与左侧菜单同源）。
-  const entries = MENU.filter((m) => m.path !== '/' && isMenuItemVisible(m, can))
+  const entries = MENU.filter(
+    (m) => m.path !== '/' && m.path !== '/dashboard' && isMenuItemVisible(m, can),
+  )
 
   const metrics = [
     { label: t('stats.inspectionCount'), value: String(stats?.inspection_count ?? 0) },
@@ -36,7 +38,7 @@ export function HomePage() {
   return (
     <div className="app-page">
       <Title level={3} style={{ marginTop: 0 }}>
-        {t('menu.home')}
+        {t('menu.dashboard')}
       </Title>
       <Paragraph type="secondary">
         {t('home.welcomeLead', { name: user?.display_name ?? user?.username ?? '' })}{' '}

@@ -1,8 +1,9 @@
 import { lazy, Suspense } from 'react'
 import { Spin } from 'antd'
-import { Route, Routes } from 'react-router-dom'
+import { Outlet, Route, Routes } from 'react-router-dom'
 import { LoginPage } from '@/features/login/LoginPage'
 import { HomePage } from '@/features/home/HomePage'
+import { MapHome } from '@/features/map-home/MapHome'
 import { DictConfigPage } from '@/features/dict-config/DictConfigPage'
 import { RbacPage } from '@/features/rbac/RbacPage'
 import { ProjectListPage } from '@/features/projects/ProjectListPage'
@@ -56,11 +57,16 @@ export function AppRoutes() {
       <Route
         element={
           <RequireAuth>
-            <AppLayout />
+            <Outlet />
           </RequireAuth>
         }
       >
-        <Route path="/" element={<HomePage />} />
+        {/* 地图主页：全屏 + 悬浮菜单，不套 ProLayout（§P1）。 */}
+        <Route path="/" element={<MapHome />} />
+
+        {/* 其余管理页仍在 ProLayout 外壳内；旧工作台仪表盘移到 /dashboard。 */}
+        <Route element={<AppLayout />}>
+          <Route path="/dashboard" element={<HomePage />} />
         <Route
           path="/projects"
           element={
@@ -155,7 +161,8 @@ export function AppRoutes() {
             </RequirePermission>
           }
         />
-        <Route path="*" element={<NotFound />} />
+          <Route path="*" element={<NotFound />} />
+        </Route>
       </Route>
     </Routes>
   )
