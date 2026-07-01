@@ -16,7 +16,12 @@ export interface FakeTMapHandles {
   MarkerCluster: ReturnType<typeof vi.fn>
   InfoWindow: ReturnType<typeof vi.fn>
   /** 最近一次创建的 Map 实例的方法 spy。 */
-  mapInstance: { destroy: ReturnType<typeof vi.fn> } | null
+  mapInstance: {
+    setCenter: ReturnType<typeof vi.fn>
+    setZoom: ReturnType<typeof vi.fn>
+    fitBounds: ReturnType<typeof vi.fn>
+    destroy: ReturnType<typeof vi.fn>
+  } | null
   /** 最近一次创建的 MultiMarker 实例（用于触发 click）。 */
   markerInstance: FakeMarker | null
   /** 最近一次创建的 InfoWindow 实例。 */
@@ -127,6 +132,15 @@ export function installFakeTMap(): FakeTMapHandles {
     Object.assign(this, info)
   })
 
+  const LatLngBounds = vi.fn(function (this: Record<string, unknown>) {
+    const pts: unknown[] = []
+    this.extend = vi.fn((ll: unknown) => {
+      pts.push(ll)
+      return this
+    })
+    this.isEmpty = () => pts.length === 0
+  })
+
   handles.LatLng = LatLng
   handles.Map = Map
   handles.MultiPolyline = MultiPolyline
@@ -136,7 +150,7 @@ export function installFakeTMap(): FakeTMapHandles {
 
   const TMap = {
     LatLng,
-    LatLngBounds: vi.fn(),
+    LatLngBounds,
     Map,
     MultiPolyline,
     MultiMarker,

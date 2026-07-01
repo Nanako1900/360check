@@ -18,7 +18,8 @@ describe('menu filtering', () => {
   it('shows only permission-free items when nothing is granted', () => {
     const none = filterMenu(MENU, () => false)
     expect(none.every((i) => !i.permission)).toBe(true)
-    expect(none.map((i) => i.path)).toEqual(['/'])
+    // 地图总览(/) 与 工作台(/dashboard) 皆无需权限，登录即可见。
+    expect(none.map((i) => i.path)).toEqual(['/', '/dashboard'])
   })
 
   it('isMenuItemVisible treats array permission as any-of', () => {

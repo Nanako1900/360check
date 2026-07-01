@@ -4,6 +4,7 @@ import {
   BookOutlined,
   DashboardOutlined,
   DownloadOutlined,
+  EnvironmentOutlined,
   PictureOutlined,
   ProjectOutlined,
   SafetyCertificateOutlined,
@@ -26,7 +27,8 @@ export interface AppMenuItem {
 }
 
 export const MENU: AppMenuItem[] = [
-  { path: '/', name: 'menu.home', icon: <DashboardOutlined /> },
+  { path: '/', name: 'menu.home', icon: <EnvironmentOutlined /> },
+  { path: '/dashboard', name: 'menu.dashboard', icon: <DashboardOutlined /> },
   {
     path: '/projects',
     name: 'menu.projects',
