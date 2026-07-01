@@ -7,6 +7,7 @@ import { CloseOutlined } from '@ant-design/icons'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import type { Project } from '@/shared/api/types'
+import { PROJECT_STATUS_META } from '@/features/projects/status'
 
 const { Text } = Typography
 
@@ -20,6 +21,7 @@ interface MapSelectionCardProps {
 export function MapSelectionCard({ project, problemCount, onClose }: MapSelectionCardProps) {
   const { t } = useTranslation()
   const navigate = useNavigate()
+  const statusMeta = PROJECT_STATUS_META[project.status]
 
   return (
     <Card
@@ -29,7 +31,7 @@ export function MapSelectionCard({ project, problemCount, onClose }: MapSelectio
       title={
         <Space size={8}>
           <span>{project.name}</span>
-          <Tag>{project.status}</Tag>
+          <Tag color={statusMeta?.color}>{statusMeta?.label ?? project.status}</Tag>
         </Space>
       }
       extra={
